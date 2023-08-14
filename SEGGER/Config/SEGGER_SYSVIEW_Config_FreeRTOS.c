@@ -66,7 +66,7 @@ extern const SEGGER_SYSVIEW_OS_API SYSVIEW_X_OS_TraceAPI;
 #define SYSVIEW_APP_NAME        "Quadrotor FreeRTOS Project"
 
 // The target device name
-#define SYSVIEW_DEVICE_NAME     "STM32F401CCU6 black-pill"
+#define SYSVIEW_DEVICE_NAME     "STM32F401RCT6 black-pill"
 
 // Frequency of the timestamp. Must match SEGGER_SYSVIEW_GET_TIMESTAMP in SEGGER_SYSVIEW_Conf.h
 #define SYSVIEW_TIMESTAMP_FREQ  (configCPU_CLOCK_HZ)

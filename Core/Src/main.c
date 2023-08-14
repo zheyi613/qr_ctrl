@@ -42,6 +42,7 @@
 #include "vl53l0x.h"
 #include "math.h"
 #include "ahrs.h"
+#include "diskio.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -74,7 +75,17 @@ enum {
 #define RAD2DEG            57.29577F
 #define DEG2RAD            0.017453292F
 
+#define SD_BUFFER_SIZE  512
 // #define ESC_CALIBRATION
+
+/* Configure tasks to enable */
+#define RADIO_TASK
+#define SENSOR_TASK
+#define TOF_TASK
+#define SD_TASK
+#define ADC_TASK
+#define CTRL_TASK
+#define MSG_TASK
 
 /* USER CODE END PD */
 
@@ -88,6 +99,7 @@ enum {
 TaskHandle_t radio_handler;
 TaskHandle_t sensor_handler;
 TaskHandle_t tof_handler;
+TaskHandle_t sd_handler;
 TaskHandle_t adc_handler;
 TaskHandle_t ctrl_handler;
 TaskHandle_t msg_handler;
@@ -167,6 +179,11 @@ struct ctrl_param {
   float D;
   uint8_t mode;
 } ctrl_param;
+
+/* variable of sd spi timer (ms) */
+WORD Timer1, Timer2;
+char *sd_idle_buf_ptr;
+char sd_buffer[2][SD_BUFFER_SIZE];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -175,6 +192,7 @@ void SystemClock_Config(void);
 static void radio_task(void *param);
 static void sensor_task(void *param);
 static void tof_task(void *param);
+static void sd_task(void *param);
 static void adc_task(void *param);
 static void ctrl_task(void *param);
 static void msg_task(void *param);
@@ -214,7 +232,6 @@ int main(void)
 
   /* USER CODE BEGIN SysInit */
   DWT_Init();
-  I2C_Recover();
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
@@ -262,6 +279,7 @@ int main(void)
 
   set_bus_mode(BUS_POLLING_MODE); /* set bus to blocking mode */
 
+#ifdef RADIO_TASK
   struct nrf24l01p_cfg nrf24l01p_param = {
     .mode = PRX_MODE,
     .crc_len = CRC_TWO_BYTES,
@@ -272,7 +290,6 @@ int main(void)
     .auto_retransmit_count = 6,
     .auto_retransmit_delay = 750
   };
-
   len = snprintf((char *)msg, MSG_MAX_LEN,
 			             "Initialize nrf24l01p...%s", "\r\n");
   CDC_Transmit_FS(msg, len);       
@@ -283,7 +300,8 @@ int main(void)
       HAL_Delay(1000);
     }
   }
-
+#endif
+#ifdef TOF_TASK
   if (vl53l0x_init(VL53L0X_SENSE_HIGH_SPEED, 20)) {
       len = snprintf((char *)msg, MSG_MAX_LEN,
 			             "Initialize VL53L0X failed!%s", "\r\n");
@@ -292,14 +310,14 @@ int main(void)
       HAL_Delay(1000);
     }
   }
-
+#endif
+#ifdef SENSOR_TASK
 	struct lps22hb_cfg lps22hb = {
    .mode = LPS22HB_STREAM_MODE,
 		.odr = LPS22HB_75HZ,
 		.lpf = LPS22HB_BW_ODR_DIV_9,
 		.ref_press = 0.0
 	};
-
 	if (lps22hb_init(lps22hb)) {
 		len = snprintf((char *)msg, MSG_MAX_LEN,
 			             "Initialize LPS22HB failed!%s", "\r\n");
@@ -308,7 +326,6 @@ int main(void)
       HAL_Delay(1000);
     }
 	}
-
 	if (icm20948_init(1125, GYRO_2000_DPS, ACCEL_16G, LP_BW_119HZ)) {
 		len = snprintf((char *)msg, MSG_MAX_LEN,
 			             "Initialize ICM-20948 failed!%s", "\r\n");
@@ -335,6 +352,7 @@ int main(void)
   // ahrs_init_imu(sensor_data.ax, sensor_data.ay, sensor_data.az);
   ahrs2euler(&attitude.roll, &attitude.pitch, &attitude.yaw);
   attitude.yaw_target = attitude.yaw;
+#endif
 
   set_bus_mode(BUS_INTERRUPT_MODE); /* set bus to non blocking mode */
 
@@ -355,25 +373,34 @@ int main(void)
 	vSetVarulMaxPRIGROUPValue();
 	SEGGER_UART_init(1500000);
 	SEGGER_SYSVIEW_Conf();
-
-  status = xTaskCreate(radio_task, "radio_task", 200, NULL, 3, &radio_handler);
+#ifdef RADIO_TASK
+  status = xTaskCreate(radio_task, "radio_task", 200, NULL, 5, &radio_handler);
 	configASSERT(status == pdPASS);
-
+#endif
+#ifdef SENSOR_TASK
   status = xTaskCreate(sensor_task, "sensor_task", 300, NULL, 3, &sensor_handler);
   configASSERT(status == pdPASS);
-
+#endif
+#ifdef TOF_TASK
   status = xTaskCreate(tof_task, "tof_task", 400, NULL, 3, &tof_handler);
   configASSERT(status == pdPASS);
-
-	status = xTaskCreate(adc_task, "adc_task", 200, NULL, 2, &adc_handler);
+#endif
+#ifdef SD_TASK
+  status = xTaskCreate(sd_task, "sd_task", 300, NULL, 2, &sd_handler);
+  configASSERT(status == pdPASS);
+#endif
+#ifdef ADC_TASK
+	status = xTaskCreate(adc_task, "adc_task", 200, NULL, 3, &adc_handler);
 	configASSERT(status == pdPASS);
-
+#endif
+#ifdef CTRL_TASK
 	status = xTaskCreate(ctrl_task, "ctrl_task", 400, NULL, 2, &ctrl_handler);
   configASSERT(status == pdPASS);
-
+#endif
+#ifdef MSG_TASK
 	status = xTaskCreate(msg_task, "msg_task", 400, NULL, 1, &msg_handler);
 	configASSERT(status == pdPASS);
-
+#endif
 	vTaskStartScheduler();
 
   /* USER CODE END 2 */
@@ -434,18 +461,15 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+/* Interrupt Callback */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
   if (GPIO_Pin == NRF_IRQ_Pin) {
-    SEGGER_SYSVIEW_Print("nrf");
-    nrf24l01p_rxtx(payload.bytes, ack_payload.bytes, ACK_PAYLOAD_WIDTH);
-
     vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
-    
-    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
   }
+  portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 void HAL_I2C_MemTxCpltCallback(I2C_HandleTypeDef *hi2c)
@@ -454,11 +478,10 @@ void HAL_I2C_MemTxCpltCallback(I2C_HandleTypeDef *hi2c)
 
   if (hi2c->Instance == hi2c2.Instance) {
     vTaskNotifyGiveFromISR(sensor_handler, &xHigherPriorityTaskWoken);
-  }
-  else if (hi2c->Instance == hi2c3.Instance) {
+  } else if (hi2c->Instance == hi2c3.Instance) {
     vTaskNotifyGiveFromISR(tof_handler, &xHigherPriorityTaskWoken);
   }
-    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+  portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c)
@@ -467,8 +490,7 @@ void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c)
 
   if (hi2c->Instance == hi2c2.Instance) {
     vTaskNotifyGiveFromISR(sensor_handler, &xHigherPriorityTaskWoken);
-  }
-  else if (hi2c->Instance == hi2c3.Instance) {
+  } else if (hi2c->Instance == hi2c3.Instance) {
     vTaskNotifyGiveFromISR(tof_handler, &xHigherPriorityTaskWoken);
   }
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
@@ -480,6 +502,8 @@ void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
 
   if (hspi->Instance == hspi1.Instance) {
     vTaskNotifyGiveFromISR(sd_handler, &xHigherPriorityTaskWoken);
+  } else if (hspi->Instance == hspi2.Instance) {
+    vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
   }
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
@@ -490,6 +514,8 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
 
   if (hspi->Instance == hspi1.Instance) {
     vTaskNotifyGiveFromISR(sd_handler, &xHigherPriorityTaskWoken);
+  } else if (hspi->Instance == hspi2.Instance) {
+    vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
   }
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
@@ -500,10 +526,22 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 
   if (hspi->Instance == hspi1.Instance) {
     vTaskNotifyGiveFromISR(sd_handler, &xHigherPriorityTaskWoken);
+  } else if (hspi->Instance == hspi2.Instance) {
+    vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
   }
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+  vTaskNotifyGiveFromISR(adc_handler, &xHigherPriorityTaskWoken);
+
+  portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+/* Task Function */
 static void radio_task(void *param)
 {
   struct attitude *att = &attitude;
@@ -519,6 +557,7 @@ static void radio_task(void *param)
       start_flag = 0;
     }
     ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
+    nrf24l01p_rxtx(payload.bytes, ack_payload.bytes, ACK_PAYLOAD_WIDTH);
     /* decode payload */
     if (pl->throttle < MAX_THROTTLE && pl->throttle >= 0)
       *thro = pl->throttle;
@@ -551,7 +590,6 @@ static void sensor_task(void *param)
   struct sensor_data *sensor = &sensor_data;
   struct attitude *att = &attitude;
   struct position *pos = &position;
-  struct ack_payload *ack_pl = &ack_payload.data;
   float dt = 0.002;
   float ax = 0, ay = 0, az = 0;
   float gx = 0, gy = 0, gz = 0;
@@ -573,9 +611,6 @@ static void sensor_task(void *param)
       sensor->gx = gx;
       sensor->gy = gy;
       sensor->gz = gz;
-    } else {
-      I2C_Reset();
-      ack_pl->event |= 1;
     }
     SEGGER_SYSVIEW_Print("mag");
     if (mag_tick == pdMS_TO_TICKS(10)) {
@@ -600,7 +635,7 @@ static void sensor_task(void *param)
     }
     SEGGER_SYSVIEW_Print("baro");
     if (baro_tick == pdMS_TO_TICKS(20)) {
-      if (!lps22hb_read_data(&press, &temp)) {
+      if (!(*lps22hb_read_data)(&press, &temp)) {
         sensor->pressure = press;
         sensor->temperature = temp;
         pos->height = (powf(1013.25 / press, 1 / 5.257) - 1.0) *
@@ -635,22 +670,30 @@ static void tof_task(void *param)
             *pos_d = (float)d * 0.001;
           }
     }
-
     vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
+
+static void sd_task(void *param)
+{
+  while(1) {
+
   }
 }
 
 static void adc_task(void *param)
 {
   float *voltage = &battery_voltage;
-  uint16_t adc_value;
+  uint16_t data[2];
+  uint8_t start_flag = 1;
 
   while (1) {
-    HAL_ADC_Start(&hadc1);
-    HAL_ADC_PollForConversion(&hadc1, 1);
-    adc_value = HAL_ADC_GetValue(&hadc1);
+    if (start_flag)
+      HAL_ADC_Start_DMA(&hadc1, (uint32_t *)data, 2);
+    ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
     /* voltage = adc / 4096 * 3.3 / 1.5 * 8.05 */
-    *voltage = (float)adc_value * 0.0043237304f;
+    *voltage = (float)data[0] * 0.0043237304f;
+    /* current = ? */
 
     vTaskDelay(pdMS_TO_TICKS(20));
   }
@@ -854,13 +897,22 @@ static void msg_task(void *param)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
-
+  
   /* USER CODE END Callback 0 */
   if (htim->Instance == TIM1) {
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
+  if (htim->Instance == TIM9) {
+    uint16_t count;
 
+    count = Timer1;
+    if (count)
+      Timer1 = --count;
+    count = Timer2;
+    if (count)
+      Timer2 = --count;
+  }
   /* USER CODE END Callback 1 */
 }
 

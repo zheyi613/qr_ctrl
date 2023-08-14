@@ -299,55 +299,5 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
 }
 
 /* USER CODE BEGIN 1 */
-void I2C_Recover(void)
-{
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
 
-  __HAL_RCC_GPIOB_CLK_ENABLE();
-  /* set SDA as input */
-  GPIO_InitStruct.Pin = GPIO_PIN_7;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-  
-  if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7) == GPIO_PIN_SET)
-    return;
-  /* set SCL as output open drain */
-  GPIO_InitStruct.Pin = GPIO_PIN_6;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  for (uint8_t i = 0; i < 9; i++) {
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
-    DWT_Delay(2);
-    
-    if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7) == GPIO_PIN_RESET)
-      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
-    else
-      break;
-
-    DWT_Delay(1);
-  }
-  /* set SDA as output open drain */
-  GPIO_InitStruct.Pin = GPIO_PIN_7;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-  /* give stop command */
-  DWT_Delay(1);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
-  DWT_Delay(1);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
-  DWT_Delay(1);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
-}
-
-void I2C_Reset(void)
-{
-  HAL_I2C_MspDeInit(&hi2c1);
-  I2C_Recover();
-  hi2c1.State = HAL_I2C_STATE_RESET;
-  MX_I2C1_Init();
-}
 /* USER CODE END 1 */

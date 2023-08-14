@@ -52,7 +52,7 @@ int32_t VL53L0X_read_multi(uint8_t address, uint8_t index, uint8_t *pdata, int32
 #ifdef DEBUG_MSG
     printf("Reading %ld to addr 0x%x:\n\r", count, index);
 #endif
-    status = i2c2_read_multi(&hi2c3, address << 1, index, pdata,
+    status = i2c_read_multi(&hi2c3, address << 1, index, pdata,
                              (int16_t)count);
 #ifdef DEBUG_MSG
     for (uint8_t i = 0; i < count; i++) {

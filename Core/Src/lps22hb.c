@@ -13,6 +13,8 @@
 #define write_reg_multi(reg, pData, size)       \
         i2c_write_multi(&hi2c2, LPS22HB_ADDR << 1, reg, pData, size)
 
+int (*lps22hb_read_data)(float *press, float *temp);
+
 enum lps22hb_reg {
 	LPS22HB_INTERRUPT_CFG = 0x0B,
 	LPS22HB_THS_P_L,

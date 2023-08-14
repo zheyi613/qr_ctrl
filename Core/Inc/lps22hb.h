@@ -62,6 +62,6 @@ struct lps22hb_cfg {
 };
 
 int lps22hb_init(struct lps22hb_cfg lps22hb);
-int (*lps22hb_read_data)(float *press, float *temp);
+extern int (*lps22hb_read_data)(float *press, float *temp);
 
 #endif

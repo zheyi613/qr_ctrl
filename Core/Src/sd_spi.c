@@ -15,15 +15,15 @@
         HAL_GPIO_WritePin(SD_CS_GPIO_Port, SD_CS_Pin, GPIO_PIN_SET)
 #define set_spi_low_clk()                                               \
         do {                                                            \
-                HAL_SPI_DeInit(&hspi1);                                 \
+                __HAL_SPI_DISABLE(&hspi1);                              \
                 hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256;\
-                HAL_SPI_Init(&hspi1);                                   \
+                __HAL_SPI_ENABLE(&hspi1);                               \
         } while (0)
 #define set_spi_high_clk()                                              \
         do {                                                            \
-                HAL_SPI_DeInit(&hspi1);                                 \
+                __HAL_SPI_DISABLE(&hspi1);                              \
                 hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8; \
-                HAL_SPI_Init(&hspi1);                                   \
+                __HAL_SPI_ENABLE(&hspi1);                               \
         } while (0)
 
 #define CMD_SIZE        6      /* 6 bytes long and start with MSB */

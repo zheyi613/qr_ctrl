@@ -44,8 +44,7 @@ void MX_I2C2_Init(void);
 void MX_I2C3_Init(void);
 
 /* USER CODE BEGIN Prototypes */
-void I2C_Recover(void);
-void I2C_Reset(void);
+
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus
