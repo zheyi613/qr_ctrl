@@ -79,9 +79,9 @@ enum {
 // #define ESC_CALIBRATION
 
 /* Configure tasks to enable */
-#define RADIO_TASK
+// #define RADIO_TASK
 #define SENSOR_TASK
-#define TOF_TASK
+// #define TOF_TASK
 #define SD_TASK
 #define ADC_TASK
 #define CTRL_TASK
@@ -386,7 +386,7 @@ int main(void)
   configASSERT(status == pdPASS);
 #endif
 #ifdef SD_TASK
-  status = xTaskCreate(sd_task, "sd_task", 300, NULL, 2, &sd_handler);
+  status = xTaskCreate(sd_task, "sd_task", 800, NULL, 2, &sd_handler);
   configASSERT(status == pdPASS);
 #endif
 #ifdef ADC_TASK
@@ -676,8 +676,41 @@ static void tof_task(void *param)
 
 static void sd_task(void *param)
 {
-  while(1) {
+  FATFS fs;
+  FIL fil;
+  struct sensor_data tmp;
+  char buffer[256];
+  UINT len, rm;
+  BaseType_t start_tick;
+  BaseType_t pass_tick;
+  uint8_t process = 0;
 
+  while(1) {
+    if (process == 0) {
+      f_mount(&fs, "", 0);
+      f_open(&fil, "test1.txt", FA_CREATE_ALWAYS | FA_READ | FA_WRITE);
+      start_tick = xTaskGetTickCount();
+      process = 1;
+    } else if (process == 1) {
+      pass_tick = xTaskGetTickCount() - start_tick;
+
+      if (pass_tick < pdMS_TO_TICKS(10000)) {
+        vTaskSuspendAll();
+        memcpy(&tmp, &sensor_data, sizeof(struct sensor_data));
+        xTaskResumeAll();
+        len = snprintf(buffer, 256, "ax: %.2f, ay: %.2f, az: %.2f, "
+                                    "gx: %.2f, gy: %.2f, gz: %.2f, "
+                                    "p: %.2f, d: %.2f\n",
+                                    tmp.ax, tmp.ay, tmp.az, tmp.gx, tmp.gy,
+                                    tmp.gz, tmp.pressure, tmp.temperature);
+        f_write(&fil, buffer, len, &rm);
+      } else {
+        f_close(&fil);
+        f_mount(NULL, "", 0);
+        process = 2;
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
 
@@ -832,7 +865,7 @@ static void msg_task(void *param)
   struct ack_payload *ack_pl = &ack_payload.data;
   uint16_t *thro = &throttle;
   struct ctrl_param *ctrl = &ctrl_param;
-  BaseType_t radio_wm, sensor_wm, tof_wm, adc_wm, ctrl_wm, msg_wm;
+  BaseType_t radio_wm, sensor_wm, tof_wm, sd_wm, adc_wm, ctrl_wm, msg_wm;
   BaseType_t min_remaining, remaining;
 
 	while (1) {
@@ -853,9 +886,10 @@ static void msg_task(void *param)
     ack_pl->voltage = (uint8_t)(*voltage * 10.f);
     xTaskResumeAll();
 
-    radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
+    // radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
     sensor_wm = uxTaskGetStackHighWaterMark(sensor_handler);
-    tof_wm = uxTaskGetStackHighWaterMark(tof_handler);
+    // tof_wm = uxTaskGetStackHighWaterMark(tof_handler);
+    sd_wm = uxTaskGetStackHighWaterMark(sd_handler);
     adc_wm = uxTaskGetStackHighWaterMark(adc_handler);
     ctrl_wm = uxTaskGetStackHighWaterMark(ctrl_handler);
     msg_wm = uxTaskGetStackHighWaterMark(msg_handler);
@@ -870,7 +904,7 @@ static void msg_task(void *param)
                    "m0: %d, m1: %d, m2: %d, m3: %d\r\n"
                    "P: %.2f, I: %.2f, D: %.2f, crash: %d\r\n"
                    "stack wm:\n\r"
-                   "radio: %ld, sensor: %ld, tof, %ld, adc: %ld\n\r"
+                   "radio: %ld, sensor: %ld, tof, %ld, sd: %ld, adc: %ld\n\r"
                    "ctrl: %ld, msg: %ld, min rm: %ld, cur rm: %ld\r\n"
                    "pass tick: %ld\r\n",
 			             att->roll, att->pitch, att->yaw,
@@ -878,10 +912,10 @@ static void msg_task(void *param)
              		   pos->height, sensor->distance, *voltage, *thro,
                    motor[0], motor[1], motor[2], motor[3],
                    ctrl->P, ctrl->I, ctrl->D, ack_pl->event,
-                   radio_wm, sensor_wm, tof_wm, adc_wm, ctrl_wm, msg_wm,
+                   radio_wm, sensor_wm, tof_wm, sd_wm, adc_wm, ctrl_wm, msg_wm,
                    min_remaining, remaining, pass_tick);
     CDC_Transmit_FS(msg, len);
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(100));
 	}
 }
 /* USER CODE END 4 */
