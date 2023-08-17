@@ -718,14 +718,15 @@ static void adc_task(void *param)
   uint8_t start_flag = 1;
 
   while (1) {
-    if (start_flag)
+    if (start_flag) {
       HAL_ADC_Start_DMA(&hadc1, (uint32_t *)data, 2);
+      start_flag = 0;
+    }
     ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
     /* voltage = adc / 4096 * 3.3 / 1.5 * 8.05 */
     *voltage = (float)data[0] * 0.0043237304f;
     /* current = ? */
 
-    vTaskDelay(pdMS_TO_TICKS(20));
   }
 }
 
