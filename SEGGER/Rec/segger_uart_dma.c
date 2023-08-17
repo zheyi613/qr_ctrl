@@ -28,7 +28,7 @@
 #define _SERVER_HELLO_SIZE (4)
 #define _TARGET_HELLO_SIZE (4)
 
-#define TX_BUFFER_SIZE  128
+#define TX_BUFFER_SIZE  1024
 
 char tx_buffer[TX_BUFFER_SIZE];
 char rx_byte;
