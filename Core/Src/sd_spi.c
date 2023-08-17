@@ -4,6 +4,9 @@
 #include "spi.h"
 #include "rtos_bus.h"
 #include <string.h>
+/* Use OS delay tick to wait timeout instead of polling spi */
+#include "FreeRTOS.h"
+#include "task.h"
 
 #define sd_spi_txrx(pTxData, pRxData, size)        \
         spi_txrx(&hspi1, pTxData, pRxData, size)
@@ -78,6 +81,7 @@ static int wait_ready(WORD ms)
         do {
                 cs_high();
                 sd_spi_rx(&token, 1); /* Nds = 1 */
+                vTaskDelay(1); /* us OS delay one tick to wait state */
                 cs_low();
                 sd_spi_rx(&token, 1);
         } while ((token != 0xFF) && Timer2);
@@ -202,9 +206,7 @@ DSTATUS disk_initialize(BYTE drv)
         memset(DO_H, 0xFF, 512);
         /* Hold CS/MOSI at least 74 cycles */
         cs_high();
-        for (i = 10; i; i--) {      
-                sd_spi_rx(resp, 1);
-        }
+        sd_spi_tx(DO_H, 10);
         cs_low();
         i = 10; /* Try to reset SD card 10 times */
         while ((send_cmd(CMD0, 0) != 0x01) && --i)
