@@ -74,8 +74,6 @@ enum {
 
 #define RAD2DEG            57.29577F
 #define DEG2RAD            0.017453292F
-
-#define SD_BUFFER_SIZE  512
 // #define ESC_CALIBRATION
 
 /* Configure tasks to enable */
@@ -182,8 +180,6 @@ struct ctrl_param {
 
 /* variable of sd spi timer (ms) */
 WORD Timer1, Timer2;
-char *sd_idle_buf_ptr;
-char sd_buffer[2][SD_BUFFER_SIZE];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -681,8 +677,7 @@ static void sd_task(void *param)
   struct sensor_data tmp;
   char buffer[256];
   UINT len, rm;
-  BaseType_t start_tick;
-  BaseType_t pass_tick;
+  TickType_t start_tick, cur_tick, pass_tick;
   uint8_t process = 0;
 
   while(1) {
@@ -690,9 +685,10 @@ static void sd_task(void *param)
       f_mount(&fs, "", 0);
       f_open(&fil, "test1.txt", FA_CREATE_ALWAYS | FA_READ | FA_WRITE);
       start_tick = xTaskGetTickCount();
+      cur_tick = start_tick;
       process = 1;
     } else if (process == 1) {
-      pass_tick = xTaskGetTickCount() - start_tick;
+      pass_tick = cur_tick - start_tick;
 
       if (pass_tick < pdMS_TO_TICKS(10000)) {
         vTaskSuspendAll();
@@ -707,10 +703,11 @@ static void sd_task(void *param)
       } else {
         f_close(&fil);
         f_mount(NULL, "", 0);
+        SEGGER_SYSVIEW_Print("sd_close");
         process = 2;
       }
     }
-    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelayUntil(&cur_tick, pdMS_TO_TICKS(100));
   }
 }
 
@@ -865,7 +862,7 @@ static void msg_task(void *param)
   struct ack_payload *ack_pl = &ack_payload.data;
   uint16_t *thro = &throttle;
   struct ctrl_param *ctrl = &ctrl_param;
-  BaseType_t radio_wm, sensor_wm, tof_wm, sd_wm, adc_wm, ctrl_wm, msg_wm;
+  BaseType_t radio_wm=0, sensor_wm, tof_wm=0, sd_wm, adc_wm, ctrl_wm, msg_wm;
   BaseType_t min_remaining, remaining;
 
 	while (1) {
