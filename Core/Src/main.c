@@ -79,7 +79,7 @@ enum {
 /* Configure tasks to enable */
 // #define RADIO_TASK
 #define SENSOR_TASK
-// #define TOF_TASK
+#define TOF_TASK
 #define SD_TASK
 #define ADC_TASK
 #define CTRL_TASK
@@ -694,11 +694,12 @@ static void sd_task(void *param)
         vTaskSuspendAll();
         memcpy(&tmp, &sensor_data, sizeof(struct sensor_data));
         xTaskResumeAll();
-        len = snprintf(buffer, 256, "ax: %.2f, ay: %.2f, az: %.2f, "
+        len = snprintf(buffer, 256, "tick: %ld, ax: %.2f, ay: %.2f, az: %.2f, "
                                     "gx: %.2f, gy: %.2f, gz: %.2f, "
-                                    "p: %.2f, d: %.2f\n",
-                                    tmp.ax, tmp.ay, tmp.az, tmp.gx, tmp.gy,
-                                    tmp.gz, tmp.pressure, tmp.temperature);
+                                    "p: %.2f, t: %.2f, d: %d\n",
+                                    cur_tick, tmp.ax, tmp.ay, tmp.az,
+                                    tmp.gx, tmp.gy, tmp.gz, tmp.pressure,
+                                    tmp.temperature, tmp.distance);
         f_write(&fil, buffer, len, &rm);
       } else {
         f_close(&fil);
@@ -886,7 +887,7 @@ static void msg_task(void *param)
 
     // radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
     sensor_wm = uxTaskGetStackHighWaterMark(sensor_handler);
-    // tof_wm = uxTaskGetStackHighWaterMark(tof_handler);
+    tof_wm = uxTaskGetStackHighWaterMark(tof_handler);
     sd_wm = uxTaskGetStackHighWaterMark(sd_handler);
     adc_wm = uxTaskGetStackHighWaterMark(adc_handler);
     ctrl_wm = uxTaskGetStackHighWaterMark(ctrl_handler);
