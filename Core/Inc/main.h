@@ -63,8 +63,6 @@ void Error_Handler(void);
 #define KEY_GPIO_Port GPIOA
 #define SD_CS_Pin GPIO_PIN_0
 #define SD_CS_GPIO_Port GPIOB
-#define SD_CD_Pin GPIO_PIN_2
-#define SD_CD_GPIO_Port GPIOB
 #define NRF_CE_Pin GPIO_PIN_12
 #define NRF_CE_GPIO_Port GPIOB
 #define NRF_CS_Pin GPIO_PIN_15
