@@ -370,11 +370,11 @@ int main(void)
 	SEGGER_UART_init(1500000);
 	SEGGER_SYSVIEW_Conf();
 #ifdef RADIO_TASK
-  status = xTaskCreate(radio_task, "radio_task", 200, NULL, 5, &radio_handler);
+  status = xTaskCreate(radio_task, "radio_task", 200, NULL, 6, &radio_handler);
 	configASSERT(status == pdPASS);
 #endif
 #ifdef SENSOR_TASK
-  status = xTaskCreate(sensor_task, "sensor_task", 300, NULL, 3, &sensor_handler);
+  status = xTaskCreate(sensor_task, "sensor_task", 300, NULL, 4, &sensor_handler);
   configASSERT(status == pdPASS);
 #endif
 #ifdef TOF_TASK
@@ -382,11 +382,11 @@ int main(void)
   configASSERT(status == pdPASS);
 #endif
 #ifdef SD_TASK
-  status = xTaskCreate(sd_task, "sd_task", 800, NULL, 2, &sd_handler);
+  status = xTaskCreate(sd_task, "sd_task", 800, NULL, 3, &sd_handler);
   configASSERT(status == pdPASS);
 #endif
 #ifdef ADC_TASK
-	status = xTaskCreate(adc_task, "adc_task", 200, NULL, 3, &adc_handler);
+	status = xTaskCreate(adc_task, "adc_task", 200, NULL, 4, &adc_handler);
 	configASSERT(status == pdPASS);
 #endif
 #ifdef CTRL_TASK
@@ -462,7 +462,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-  SEGGER_SYSVIEW_RecordEnterISR();
+  traceISR_ENTER();
 
   if (GPIO_Pin == NRF_IRQ_Pin) {
     SEGGER_SYSVIEW_Print("nrf");
@@ -476,7 +476,7 @@ void HAL_I2C_MemTxCpltCallback(I2C_HandleTypeDef *hi2c)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-  SEGGER_SYSVIEW_RecordEnterISR();
+  traceISR_ENTER();
 
   if (hi2c->Instance == hi2c2.Instance) {
     vTaskNotifyGiveFromISR(sensor_handler, &xHigherPriorityTaskWoken);
@@ -490,7 +490,7 @@ void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-  SEGGER_SYSVIEW_RecordEnterISR();
+  traceISR_ENTER();
 
   if (hi2c->Instance == hi2c2.Instance) {
     vTaskNotifyGiveFromISR(sensor_handler, &xHigherPriorityTaskWoken);
@@ -504,10 +504,10 @@ void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-  SEGGER_SYSVIEW_RecordEnterISR();
+  traceISR_ENTER();
 
   if (hspi->Instance == hspi1.Instance) {
-    vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
+    vTaskNotifyGiveFromISR(sd_handler, &xHigherPriorityTaskWoken);
   }
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
@@ -516,7 +516,7 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-  SEGGER_SYSVIEW_RecordEnterISR();
+  traceISR_ENTER();
 
   if (hspi->Instance == hspi1.Instance) {
     vTaskNotifyGiveFromISR(sd_handler, &xHigherPriorityTaskWoken);
@@ -528,7 +528,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-  SEGGER_SYSVIEW_RecordEnterISR();
+  traceISR_ENTER();
 
   vTaskNotifyGiveFromISR(adc_handler, &xHigherPriorityTaskWoken);
 
@@ -583,7 +583,7 @@ static void sensor_task(void *param)
   struct sensor_data *sensor = &sensor_data;
   struct attitude *att = &attitude;
   struct position *pos = &position;
-  float dt = 0.002;
+  float dt = TIME_PER_TICK;
   float ax = 0, ay = 0, az = 0;
   float gx = 0, gy = 0, gz = 0;
   float mx = 0, my = 0, mz = 0, mag_square;

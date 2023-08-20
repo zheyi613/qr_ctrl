@@ -8,7 +8,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-#define MAX_SPI_POLLING_DATA_SIZE       128
+#define MAX_SPI_POLLING_DATA_SIZE       64
 
 uint8_t bus_int_mode;
 
@@ -29,8 +29,8 @@ int i2c_write_multi(I2C_HandleTypeDef *hi2c, uint8_t address, uint8_t reg,
 
         if (bus_int_mode) {
                 status = HAL_I2C_Mem_Write_DMA(hi2c, address, reg,
-                                               I2C_MEMADD_SIZE_8BIT,
-                                               data, size);
+                                        I2C_MEMADD_SIZE_8BIT,
+                                        data, size);
                 ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
         } else {
                 status = HAL_I2C_Mem_Write(hi2c, address, reg,
@@ -47,8 +47,8 @@ int i2c_read_multi(I2C_HandleTypeDef *hi2c, uint8_t address, uint8_t reg,
 
         if (bus_int_mode) {
                 status = HAL_I2C_Mem_Read_DMA(hi2c, address, reg,
-                                              I2C_MEMADD_SIZE_8BIT,
-                                              data, size);
+                                        I2C_MEMADD_SIZE_8BIT,
+                                        data, size);
                 ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
         } else {
                 status = HAL_I2C_Mem_Read(hi2c, address, reg,

@@ -28,7 +28,7 @@
 #define _SERVER_HELLO_SIZE (4)
 #define _TARGET_HELLO_SIZE (4)
 
-#define TX_BUFFER_SIZE  256
+#define TX_BUFFER_SIZE  512
 
 char tx_buffer[TX_BUFFER_SIZE];
 char rx_byte;
@@ -95,8 +95,8 @@ void USART_DMA_init(uint32_t baudrate, char *tx_buf, char *rx_buf)
                 | DMA_SxCR_TCIE;      /* Transfer complete interrupt enable */
 
         /* Setup callbacks which are called by ISR handler and enable
-         * interrupt in NVIC (priority: 6) */
-        NVIC_SetPriority(DMA2_Stream7_IRQn, 6);
+         * interrupt in NVIC (priority: 7) */
+        NVIC_SetPriority(DMA2_Stream7_IRQn, 7);
         NVIC_EnableIRQ(DMA2_Stream7_IRQn);
 
         /*   Initialize RX DMA (Stream 5, CH4)   */
@@ -131,8 +131,8 @@ void USART_DMA_init(uint32_t baudrate, char *tx_buf, char *rx_buf)
                 | DMA_SxCR_TCIE;      /* Transfer complete interrupt enable */
 
         /* Setup callbacks which are called by ISR handler and enable
-         * interrupt in NVIC (priority: 6) */
-        NVIC_SetPriority(DMA2_Stream5_IRQn, 6);
+         * interrupt in NVIC (priority: 7) */
+        NVIC_SetPriority(DMA2_Stream5_IRQn, 7);
         NVIC_EnableIRQ(DMA2_Stream5_IRQn);
 
         /* Configure USART RX/TX pins for alternate function (AF7) */
