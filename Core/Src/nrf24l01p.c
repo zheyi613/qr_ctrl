@@ -8,15 +8,15 @@
 #include "nrf24l01p.h"
 #include "dwt_delay.h"
 #include "gpio.h"
-#include "rtos_bus.h"
+#include "spi.h"
 
 /* Define user spi function */
 #define nrf_spi_txrx(pTxData,pRxData)      \
-        spi_txrx(&hspi2, pTxData, pRxData, 1)
+        HAL_SPI_TransmitReceive(&hspi2, pTxData, pRxData, 1, 1)
 #define nrf_spi_rx(pData, size)   \
-        spi_rx(&hspi2, pData, size)
+        HAL_SPI_Receive(&hspi2, pData, size, 1)
 #define nrf_spi_tx(pData, size)   \
-        spi_tx(&hspi2, pData, size)
+        HAL_SPI_Transmit(&hspi2, pData, size, 1)
 #define cs_high()       \
         HAL_GPIO_WritePin(NRF_CS_GPIO_Port, NRF_CS_Pin, GPIO_PIN_SET)
 #define cs_low()        \

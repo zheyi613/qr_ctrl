@@ -77,7 +77,7 @@ enum {
 // #define ESC_CALIBRATION
 
 /* Configure tasks to enable */
-// #define RADIO_TASK
+#define RADIO_TASK
 #define SENSOR_TASK
 #define TOF_TASK
 #define SD_TASK
@@ -462,7 +462,11 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
+  SEGGER_SYSVIEW_RecordEnterISR();
+
   if (GPIO_Pin == NRF_IRQ_Pin) {
+    SEGGER_SYSVIEW_Print("nrf");
+    nrf24l01p_rxtx(payload.bytes, ack_payload.bytes, ACK_PAYLOAD_WIDTH);
     vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
   }
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
@@ -471,6 +475,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 void HAL_I2C_MemTxCpltCallback(I2C_HandleTypeDef *hi2c)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+  SEGGER_SYSVIEW_RecordEnterISR();
 
   if (hi2c->Instance == hi2c2.Instance) {
     vTaskNotifyGiveFromISR(sensor_handler, &xHigherPriorityTaskWoken);
@@ -484,6 +490,8 @@ void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
+  SEGGER_SYSVIEW_RecordEnterISR();
+
   if (hi2c->Instance == hi2c2.Instance) {
     vTaskNotifyGiveFromISR(sensor_handler, &xHigherPriorityTaskWoken);
   } else if (hi2c->Instance == hi2c3.Instance) {
@@ -496,21 +504,9 @@ void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-  if (hspi->Instance == hspi1.Instance) {
-    vTaskNotifyGiveFromISR(sd_handler, &xHigherPriorityTaskWoken);
-  } else if (hspi->Instance == hspi2.Instance) {
-    vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
-  }
-  portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-}
-
-void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
-{
-  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+  SEGGER_SYSVIEW_RecordEnterISR();
 
   if (hspi->Instance == hspi1.Instance) {
-    vTaskNotifyGiveFromISR(sd_handler, &xHigherPriorityTaskWoken);
-  } else if (hspi->Instance == hspi2.Instance) {
     vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
   }
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
@@ -520,10 +516,10 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
+  SEGGER_SYSVIEW_RecordEnterISR();
+
   if (hspi->Instance == hspi1.Instance) {
     vTaskNotifyGiveFromISR(sd_handler, &xHigherPriorityTaskWoken);
-  } else if (hspi->Instance == hspi2.Instance) {
-    vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
   }
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
@@ -531,6 +527,8 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+  SEGGER_SYSVIEW_RecordEnterISR();
 
   vTaskNotifyGiveFromISR(adc_handler, &xHigherPriorityTaskWoken);
 
@@ -553,7 +551,6 @@ static void radio_task(void *param)
       start_flag = 0;
     }
     ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
-    nrf24l01p_rxtx(payload.bytes, ack_payload.bytes, ACK_PAYLOAD_WIDTH);
     /* decode payload */
     if (pl->throttle < MAX_THROTTLE && pl->throttle >= 0)
       *thro = pl->throttle;
@@ -885,7 +882,7 @@ static void msg_task(void *param)
     ack_pl->voltage = (uint8_t)(*voltage * 10.f);
     xTaskResumeAll();
 
-    // radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
+    radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
     sensor_wm = uxTaskGetStackHighWaterMark(sensor_handler);
     tof_wm = uxTaskGetStackHighWaterMark(tof_handler);
     sd_wm = uxTaskGetStackHighWaterMark(sd_handler);
