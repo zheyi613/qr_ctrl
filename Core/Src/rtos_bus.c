@@ -8,6 +8,8 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
+#define MAX_SPI_POLLING_DATA_SIZE       128
+
 uint8_t bus_int_mode;
 
 /**
@@ -61,7 +63,7 @@ int spi_tx(SPI_HandleTypeDef *hspi, uint8_t *data, uint16_t size)
         int status;
 
         if (bus_int_mode) {
-                if (size <= 8) {
+                if (size <= MAX_SPI_POLLING_DATA_SIZE) {
                         status = HAL_SPI_Transmit(hspi, data, size, 1);
                 } else {
                         status = HAL_SPI_Transmit_DMA(hspi, data, size);
@@ -78,7 +80,7 @@ int spi_rx(SPI_HandleTypeDef *hspi, uint8_t *data, uint16_t size)
         int status;
 
         if (bus_int_mode) {
-                if (size <= 8) {
+                if (size <= MAX_SPI_POLLING_DATA_SIZE) {
                         status = HAL_SPI_Receive(hspi, data, size, 1);
                 } else {
                         status = HAL_SPI_Receive_DMA(hspi, data, size);
@@ -96,7 +98,7 @@ int spi_txrx(SPI_HandleTypeDef *hspi, uint8_t *tx_data, uint8_t *rx_data,
         int status = 0;
 
         if (bus_int_mode) {
-                if (size <= 8) {
+                if (size <= MAX_SPI_POLLING_DATA_SIZE) {
                         status = HAL_SPI_TransmitReceive(hspi, tx_data,
                                                          rx_data, size, 1);
                 } else {
