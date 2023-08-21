@@ -65,11 +65,11 @@ void Error_Handler(void);
 #define SD_CS_GPIO_Port GPIOB
 #define NRF_CE_Pin GPIO_PIN_12
 #define NRF_CE_GPIO_Port GPIOB
-#define NRF_IRQ_Pin GPIO_PIN_15
-#define NRF_IRQ_GPIO_Port GPIOA
-#define NRF_IRQ_EXTI_IRQn EXTI15_10_IRQn
-#define NRF_CS_Pin GPIO_PIN_5
-#define NRF_CS_GPIO_Port GPIOB
+#define NRF_CS_Pin GPIO_PIN_15
+#define NRF_CS_GPIO_Port GPIOA
+#define NRF_IRQ_Pin GPIO_PIN_5
+#define NRF_IRQ_GPIO_Port GPIOB
+#define NRF_IRQ_EXTI_IRQn EXTI9_5_IRQn
 
 /* USER CODE BEGIN Private defines */
 
