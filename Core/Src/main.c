@@ -52,7 +52,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define MSG_MAX_LEN        400
+#define MSG_MAX_LEN        600
 
 #define PAYLOAD_WIDTH      32
 #define ACK_PAYLOAD_WIDTH  20
@@ -80,6 +80,7 @@ enum {
 #define RADIO_TASK
 #define SENSOR_TASK
 // #define TOF_TASK
+#define GPS_TASK
 #define SD_TASK
 #define ADC_TASK
 #define CTRL_TASK
@@ -97,6 +98,7 @@ enum {
 TaskHandle_t radio_handler;
 TaskHandle_t sensor_handler;
 TaskHandle_t tof_handler;
+TaskHandle_t gps_handler;
 TaskHandle_t sd_handler;
 TaskHandle_t adc_handler;
 TaskHandle_t ctrl_handler;
@@ -180,6 +182,11 @@ struct ctrl_param {
 
 /* variable of sd spi timer (ms) */
 WORD Timer1, Timer2;
+
+/* GPS buffer */
+char gps_buffer[2][256];
+char *gps_rx_buf_ptr;
+uint8_t gps_idle_buf_id;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -188,6 +195,7 @@ void SystemClock_Config(void);
 static void radio_task(void *param);
 static void sensor_task(void *param);
 static void tof_task(void *param);
+static void gps_task(void *param);
 static void sd_task(void *param);
 static void adc_task(void *param);
 static void ctrl_task(void *param);
@@ -243,8 +251,14 @@ int main(void)
   MX_USART2_UART_Init();
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
+  /* initialize global variable */
+  memset(&sensor_data, 0, sizeof(struct sensor_data));
+  memset(&attitude, 0, sizeof(struct attitude));
+  memset(&position, 0, sizeof(struct position));
   memset(payload.bytes, 0, PAYLOAD_WIDTH);
   memset(ack_payload.bytes, 0, ACK_PAYLOAD_WIDTH);
+  memset(&ctrl_param, 0, sizeof(struct ctrl_param));
+  memset(gps_buffer, 0, 512);
 
 	#ifdef ESC_CALIBRATION
   __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, MOTOR_DUTY_RANGE + 1999);
@@ -379,6 +393,10 @@ int main(void)
 #endif
 #ifdef TOF_TASK
   status = xTaskCreate(tof_task, "tof_task", 400, NULL, 3, &tof_handler);
+  configASSERT(status == pdPASS);
+#endif
+#ifdef GPS_TASK
+  status = xTaskCreate(gps_task, "gps_task", 400, NULL, 3, &gps_handler);
   configASSERT(status == pdPASS);
 #endif
 #ifdef SD_TASK
@@ -522,6 +540,28 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
+void USART2_IRQHandler(void)
+{
+  traceISR_ENTER();
+
+  if (USART2->SR & USART_SR_RXNE) {
+    *gps_rx_buf_ptr = (uint8_t)USART2->DR;
+    if (*gps_rx_buf_ptr == '\n') {
+      BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+      gps_idle_buf_id = !gps_idle_buf_id;
+      gps_rx_buf_ptr = gps_buffer[!gps_idle_buf_id];
+
+      vTaskNotifyGiveFromISR(gps_handler, &xHigherPriorityTaskWoken);
+
+      portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    } else {
+      gps_rx_buf_ptr++;
+    }
+  }
+  traceISR_EXIT();
+}
+
 /* Task Function */
 static void radio_task(void *param)
 {
@@ -648,6 +688,23 @@ static void tof_task(void *param)
           }
     }
     vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
+
+static void gps_task(void *param)
+{
+  uint8_t start_flag = 1;
+
+  while (1) {
+    if (start_flag) {
+      gps_idle_buf_id = 0;
+      gps_rx_buf_ptr = gps_buffer[!gps_idle_buf_id];
+      __HAL_UART_ENABLE_IT(&huart2, UART_IT_RXNE);
+      start_flag = 0;
+      /* Call Task Notify Take to discharge first package */
+      ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
+    }
+    ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
   }
 }
 
@@ -845,7 +902,7 @@ static void msg_task(void *param)
   struct ack_payload *ack_pl = &ack_payload.data;
   uint16_t *thro = &throttle;
   struct ctrl_param *ctrl = &ctrl_param;
-  BaseType_t radio_wm = 0, sensor_wm = 0, tof_wm = 0;
+  BaseType_t radio_wm = 0, sensor_wm = 0, tof_wm = 0, gps_wm = 0;
   BaseType_t sd_wm = 0, adc_wm = 0, ctrl_wm = 0, msg_wm = 0;
   BaseType_t min_remaining, remaining;
 
@@ -870,6 +927,7 @@ static void msg_task(void *param)
     radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
     sensor_wm = uxTaskGetStackHighWaterMark(sensor_handler);
     // tof_wm = uxTaskGetStackHighWaterMark(tof_handler);
+    gps_wm = uxTaskGetStackHighWaterMark(gps_handler);
     sd_wm = uxTaskGetStackHighWaterMark(sd_handler);
     adc_wm = uxTaskGetStackHighWaterMark(adc_handler);
     ctrl_wm = uxTaskGetStackHighWaterMark(ctrl_handler);
@@ -885,18 +943,22 @@ static void msg_task(void *param)
                    "m0: %d, m1: %d, m2: %d, m3: %d\r\n"
                    "P: %.2f, I: %.2f, D: %.2f, crash: %d\r\n"
                    "stack wm:\n\r"
-                   "radio: %ld, sensor: %ld, tof, %ld, sd: %ld, adc: %ld\n\r"
-                   "ctrl: %ld, msg: %ld, min rm: %ld, cur rm: %ld\r\n"
-                   "pass tick: %ld\r\n",
+                   "radio: %ld, sensor: %ld, tof, %ld, gps: %ld\r\n"
+                   "sd: %ld, adc: %ld, ctrl: %ld, msg: %ld\r\n"
+                   "min rm: %ld, cur rm: %ld\r\n"
+                   "pass tick: %ld\r\n"
+                   "%s",
 			             att->roll, att->pitch, att->yaw,
                    att->roll_target, att->pitch_target, att->yaw_target,
              		   pos->height, sensor->distance, *voltage, *thro,
                    motor[0], motor[1], motor[2], motor[3],
                    ctrl->P, ctrl->I, ctrl->D, ack_pl->event,
-                   radio_wm, sensor_wm, tof_wm, sd_wm, adc_wm, ctrl_wm, msg_wm,
-                   min_remaining, remaining, pass_tick);
+                   radio_wm, sensor_wm, tof_wm, gps_wm,
+                   sd_wm, adc_wm, ctrl_wm, msg_wm,
+                   min_remaining, remaining, pass_tick,
+                   gps_buffer[gps_idle_buf_id]);
     CDC_Transmit_FS(msg, len);
-    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(200));
 	}
 }
 /* USER CODE END 4 */
