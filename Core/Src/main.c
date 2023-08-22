@@ -79,7 +79,7 @@ enum {
 /* Configure tasks to enable */
 #define RADIO_TASK
 #define SENSOR_TASK
-#define TOF_TASK
+// #define TOF_TASK
 #define SD_TASK
 #define ADC_TASK
 #define CTRL_TASK
@@ -462,10 +462,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-  traceISR_ENTER();
-
   if (GPIO_Pin == NRF_IRQ_Pin) {
-    SEGGER_SYSVIEW_Print("nrf");
     nrf24l01p_rxtx(payload.bytes, ack_payload.bytes, ACK_PAYLOAD_WIDTH);
     vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
   }
@@ -475,8 +472,6 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 void HAL_I2C_MemTxCpltCallback(I2C_HandleTypeDef *hi2c)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-
-  traceISR_ENTER();
 
   if (hi2c->Instance == hi2c2.Instance) {
     vTaskNotifyGiveFromISR(sensor_handler, &xHigherPriorityTaskWoken);
@@ -490,8 +485,6 @@ void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-  traceISR_ENTER();
-
   if (hi2c->Instance == hi2c2.Instance) {
     vTaskNotifyGiveFromISR(sensor_handler, &xHigherPriorityTaskWoken);
   } else if (hi2c->Instance == hi2c3.Instance) {
@@ -504,8 +497,6 @@ void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-  traceISR_ENTER();
-
   if (hspi->Instance == hspi1.Instance) {
     vTaskNotifyGiveFromISR(sd_handler, &xHigherPriorityTaskWoken);
   }
@@ -516,8 +507,6 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-  traceISR_ENTER();
-
   if (hspi->Instance == hspi1.Instance) {
     vTaskNotifyGiveFromISR(sd_handler, &xHigherPriorityTaskWoken);
   }
@@ -527,8 +516,6 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-
-  traceISR_ENTER();
 
   vTaskNotifyGiveFromISR(adc_handler, &xHigherPriorityTaskWoken);
 
@@ -591,7 +578,6 @@ static void sensor_task(void *param)
   uint8_t mag_err = 1;
 
   while (1) {
-    SEGGER_SYSVIEW_Print("imu");
     if (!icm20948_read_axis6(&ax, &ay, &az, &gx, &gy, &gz)) {
       gx *= DEG2RAD;
       gy *= DEG2RAD;
@@ -605,7 +591,6 @@ static void sensor_task(void *param)
       sensor->gy = gy;
       sensor->gz = gz;
     }
-    SEGGER_SYSVIEW_Print("mag");
     if (mag_tick == pdMS_TO_TICKS(10)) {
       if (!ak09916_read_data(&mx, &my, &mz)) {
         mag_square = mx * mx + my * my + mz * mz;
@@ -626,7 +611,6 @@ static void sensor_task(void *param)
       }
       mag_tick = 0;
     }
-    SEGGER_SYSVIEW_Print("baro");
     if (baro_tick == pdMS_TO_TICKS(20)) {
       if (!(*lps22hb_read_data)(&press, &temp)) {
         sensor->pressure = press;
@@ -861,7 +845,8 @@ static void msg_task(void *param)
   struct ack_payload *ack_pl = &ack_payload.data;
   uint16_t *thro = &throttle;
   struct ctrl_param *ctrl = &ctrl_param;
-  BaseType_t radio_wm=0, sensor_wm, tof_wm=0, sd_wm, adc_wm, ctrl_wm, msg_wm;
+  BaseType_t radio_wm = 0, sensor_wm = 0, tof_wm = 0;
+  BaseType_t sd_wm = 0, adc_wm = 0, ctrl_wm = 0, msg_wm = 0;
   BaseType_t min_remaining, remaining;
 
 	while (1) {
@@ -884,7 +869,7 @@ static void msg_task(void *param)
 
     radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
     sensor_wm = uxTaskGetStackHighWaterMark(sensor_handler);
-    tof_wm = uxTaskGetStackHighWaterMark(tof_handler);
+    // tof_wm = uxTaskGetStackHighWaterMark(tof_handler);
     sd_wm = uxTaskGetStackHighWaterMark(sd_handler);
     adc_wm = uxTaskGetStackHighWaterMark(adc_handler);
     ctrl_wm = uxTaskGetStackHighWaterMark(ctrl_handler);
