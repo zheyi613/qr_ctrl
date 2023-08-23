@@ -96,6 +96,14 @@ enum {
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
+#define ENU2NED(enu_x, enu_y, enu_z)  \
+  do {                                \
+    float tmp = enu_x;                \
+                                      \
+    enu_x = enu_y;                    \
+    enu_y = tmp;                      \
+    enu_z = -enu_z;                   \
+  } while (0)
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -215,9 +223,6 @@ void module_init_failed(enum module_init_failed_id id)
     HAL_Delay(1000);
   }
 }
-
-void enu2ned(float *x, float *y, float *z);
-
 extern void attitude_err(float q[4], float sp_r, float sp_p, float sp_y,
                          float err[3]);
 /* USER CODE END PFP */
@@ -342,8 +347,8 @@ int main(void)
   icm20948_read_axis6(&sensor.ax, &sensor.ay, &sensor.az,
                       &sensor.gx, &sensor.gy, &sensor.gz);
   ak09916_read_data(&sensor.mx, &sensor.my, &sensor.mz);
-  enu2ned(&sensor.ax, &sensor.ay, &sensor.az);
-  enu2ned(&sensor.mx, &sensor.my, &sensor.mz);
+  ENU2NED(sensor.ax, sensor.ay, sensor.az);
+  ENU2NED(sensor.mx, sensor.my, sensor.mz);
   ahrs_init(sensor.ax, sensor.ay, sensor.az,
             sensor.mx, sensor.my, sensor.mz);
   // ahrs_init_imu(sensor.ax, sensor.ay, sensor.az);
@@ -576,15 +581,6 @@ static void radio_task(void *param)
   }
 }
 
-void enu2ned(float *x, float *y, float *z)
-{
-  float tmp = *x;
-
-  *x = *y;
-  *y = tmp;
-  *z = -(*z);
-}
-
 static void sensor_task(void *param)
 {
   TickType_t mag_tick = 0, baro_tick = 0;
@@ -599,8 +595,8 @@ static void sensor_task(void *param)
       gx *= DEG2RAD;
       gy *= DEG2RAD;
       gz *= DEG2RAD;
-      enu2ned(&gx, &gy, &gz);
-      enu2ned(&ax, &ay, &az);     
+      ENU2NED(gx, gy, gz);
+      ENU2NED(ax, ay, az);     
       sensor.ax = ax;
       sensor.ay = ay;
       sensor.az = az;
@@ -615,7 +611,7 @@ static void sensor_task(void *param)
         /* 25 uT < norm(mag) < 65 uT */
         if (mag_square > 625.f && mag_square < 4225.f) {
           /* transform axis to attitude form */
-          enu2ned(&mx, &my, &mz);
+          ENU2NED(mx, my, mz);
           sensor.mx = mx;
           sensor.my = my;
           sensor.mz = mz;
