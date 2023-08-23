@@ -39,6 +39,7 @@
 #include "icm20948.h"
 #include "ak09916.h"
 #include "nrf24l01p.h"
+#include "nrf_payload.h"
 #include "vl53l0x.h"
 #include "math.h"
 #include "ahrs.h"
@@ -52,10 +53,25 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define MSG_MAX_LEN        600
 
-#define PAYLOAD_WIDTH      32
-#define ACK_PAYLOAD_WIDTH  20
+/* Configure tasks to enable */
+#define RADIO_TASK
+#define SENSOR_TASK
+// #define TOF_TASK
+#define GPS_TASK
+#define SD_TASK
+#define ADC_TASK
+#define CTRL_TASK
+#define MSG_TASK
+
+/* Module initialize failed number */
+enum module_init_failed_id {
+  MODULE_FAILED_NRF24L01P,
+  MODULE_FAILED_TOF,
+  MODULE_FAILED_LPS22HB,
+  MODULE_FAILED_ICM20948,
+  MODULE_FAILED_AK09916
+};
 
 #define MOTOR_DUTY_RANGE   2000 /* esc standard: 1-2ms, pwm arr: 2000-3999 */
 #define MOTOR_CTRL_RANGE   MOTOR_DUTY_RANGE * 0.2
@@ -76,16 +92,6 @@ enum {
 #define DEG2RAD            0.017453292F
 // #define ESC_CALIBRATION
 
-/* Configure tasks to enable */
-#define RADIO_TASK
-#define SENSOR_TASK
-// #define TOF_TASK
-#define GPS_TASK
-#define SD_TASK
-#define ADC_TASK
-#define CTRL_TASK
-#define MSG_TASK
-
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -104,8 +110,8 @@ TaskHandle_t adc_handler;
 TaskHandle_t ctrl_handler;
 TaskHandle_t msg_handler;
 
-uint8_t msg[MSG_MAX_LEN];
-uint16_t len;
+struct payload pl;
+struct ack_payload ack_pl;
 
 struct sensor_data {
   float ax;
@@ -120,7 +126,7 @@ struct sensor_data {
   float pressure;
   float temperature;
   uint16_t distance;
-} sensor_data;
+} sensor;
 
 struct attitude {
   float q[4];
@@ -130,50 +136,20 @@ struct attitude {
   float roll_target;
   float pitch_target;
   float yaw_target;
-} attitude;
+} att;
 
 struct position {
   float distance;
   float height;
   float height_target;
-} position;
+} pos;
 
 static float battery_voltage = 0;
-
-union {
-  struct payload {
-    uint16_t throttle;
-    int16_t roll_target; /* +-180deg/32768 LSB */
-    int16_t pitch_target;
-    int16_t yaw_target;
-    uint16_t height_target; /* 1mm LSB */
-    uint8_t P;           /* 0.05 LSB */
-    uint8_t I;
-    uint8_t D;
-    uint8_t mode;
-    uint8_t unlock;
-    uint8_t dummy[17];
-  } data;
-  uint8_t bytes[PAYLOAD_WIDTH];
-} payload;
-union {
-  struct ack_payload {
-    int16_t roll;
-    int16_t pitch;
-    int16_t yaw;
-    uint16_t throttle;
-    uint16_t motor[4];
-    int16_t height;    /* 0.01 m LSB, range: +-327.68 m */
-    uint8_t voltage;   /* 0.1 V LSB, range: 0 ~ 17.5 V */
-    uint8_t event;
-  } data;
-  uint8_t bytes[ACK_PAYLOAD_WIDTH];
-} ack_payload;
 
 uint16_t throttle;
 uint16_t motor[4];
 
-struct ctrl_param {
+struct ctrl_parameter {
   float P;
   float I;
   float D;
@@ -200,6 +176,42 @@ static void sd_task(void *param);
 static void adc_task(void *param);
 static void ctrl_task(void *param);
 static void msg_task(void *param);
+
+void module_init_failed(enum module_init_failed_id id)
+{
+  char msg[100], len, count;
+
+  switch (id) {
+  case MODULE_FAILED_NRF24L01P:
+    len = snprintf(msg, 100, "Initialize NRF24L01+ failed...\n");
+    break;
+  case MODULE_FAILED_TOF:
+    len = snprintf(msg, 100, "Initialize TOF module failed...\n");
+    break;
+  case MODULE_FAILED_ICM20948:
+    len = snprintf(msg, 100, "Initialize ICM-20948 failed...\n");
+    break;
+  case MODULE_FAILED_AK09916:
+    len = snprintf(msg, 100, "Initialize AK-09916 failed...\n");
+    break;
+  default:
+    len = snprintf(msg, 100, "Initialize not defined failed...\n");
+    break;
+  }
+  while (1) {
+    CDC_Transmit_FS((uint8_t *)msg, len);
+    count = id + 1;
+
+    do {
+      HAL_GPIO_TogglePin(BLUE_LED_GPIO_Port, BLUE_LED_Pin);
+      HAL_Delay(250);
+      HAL_GPIO_TogglePin(BLUE_LED_GPIO_Port, BLUE_LED_Pin);
+      HAL_Delay(250);
+    } while (--count);
+
+    HAL_Delay(1000);
+  }
+}
 
 void enu2ned(float *x, float *y, float *z);
 
@@ -252,12 +264,12 @@ int main(void)
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
   /* initialize global variable */
-  memset(&sensor_data, 0, sizeof(struct sensor_data));
-  memset(&attitude, 0, sizeof(struct attitude));
-  memset(&position, 0, sizeof(struct position));
-  memset(payload.bytes, 0, PAYLOAD_WIDTH);
-  memset(ack_payload.bytes, 0, ACK_PAYLOAD_WIDTH);
-  memset(&ctrl_param, 0, sizeof(struct ctrl_param));
+  memset(&sensor, 0, sizeof(struct sensor_data));
+  memset(&att, 0, sizeof(struct attitude));
+  memset(&pos, 0, sizeof(struct position));
+  memset(&pl, 0, PAYLOAD_WIDTH);
+  memset(&ack_pl, 0, ACK_PAYLOAD_WIDTH);
+  memset(&ctrl_param, 0, sizeof(struct ctrl_parameter));
   memset(gps_buffer, 0, 512);
 
 	#ifdef ESC_CALIBRATION
@@ -300,26 +312,12 @@ int main(void)
     .auto_retransmit_count = 6,
     .auto_retransmit_delay = 750
   };
-  len = snprintf((char *)msg, MSG_MAX_LEN,
-			             "Initialize nrf24l01p...%s", "\r\n");
-  CDC_Transmit_FS(msg, len);       
-
-  if (nrf24l01p_init(&nrf24l01p_param)) {
-    while (1) {
-      HAL_GPIO_TogglePin(BLUE_LED_GPIO_Port, BLUE_LED_Pin);
-      HAL_Delay(1000);
-    }
-  }
+  if (nrf24l01p_init(&nrf24l01p_param))
+    module_init_failed(MODULE_FAILED_NRF24L01P);
 #endif
 #ifdef TOF_TASK
-  if (vl53l0x_init(VL53L0X_SENSE_HIGH_SPEED, 20)) {
-      len = snprintf((char *)msg, MSG_MAX_LEN,
-			             "Initialize VL53L0X failed!%s", "\r\n");
-    while (1) {
-      CDC_Transmit_FS(msg, len);
-      HAL_Delay(1000);
-    }
-  }
+  if (vl53l0x_init(VL53L0X_SENSE_HIGH_SPEED, 20))
+    module_init_failed(MODULE_FAILED_TOF);
 #endif
 #ifdef SENSOR_TASK
 	struct lps22hb_cfg lps22hb = {
@@ -328,40 +326,25 @@ int main(void)
 		.lpf = LPS22HB_BW_ODR_DIV_9,
 		.ref_press = 0.0
 	};
-	if (lps22hb_init(lps22hb)) {
-		len = snprintf((char *)msg, MSG_MAX_LEN,
-			             "Initialize LPS22HB failed!%s", "\r\n");
-		while (1) {
-		  CDC_Transmit_FS(msg, len);
-      HAL_Delay(1000);
-    }
-	}
-	if (icm20948_init(1125, GYRO_2000_DPS, ACCEL_16G, LP_BW_119HZ)) {
-		len = snprintf((char *)msg, MSG_MAX_LEN,
-			             "Initialize ICM-20948 failed!%s", "\r\n");
-		while (1) {
-		  CDC_Transmit_FS(msg, len);
-      HAL_Delay(1000);
-    }
-	}
-  if (ak09916_init(AK09916_100HZ_MODE)) {
-    len = snprintf((char *)msg, MSG_MAX_LEN,
-			             "Initialize AK-09916 failed!%s", "\r\n");
-    while (1) {
-		  CDC_Transmit_FS(msg, len);
-      HAL_Delay(1000);
-    }
-  }
-  icm20948_read_axis6(&sensor_data.ax, &sensor_data.ay, &sensor_data.az,
-                      &sensor_data.gx, &sensor_data.gy, &sensor_data.gz);
-  ak09916_read_data(&sensor_data.mx, &sensor_data.my, &sensor_data.mz);
-  enu2ned(&sensor_data.ax, &sensor_data.ay, &sensor_data.az);
-  enu2ned(&sensor_data.mx, &sensor_data.my, &sensor_data.mz);
-  ahrs_init(sensor_data.ax, sensor_data.ay, sensor_data.az,
-            sensor_data.mx, sensor_data.my, sensor_data.mz);
-  // ahrs_init_imu(sensor_data.ax, sensor_data.ay, sensor_data.az);
-  ahrs2euler(&attitude.roll, &attitude.pitch, &attitude.yaw);
-  attitude.yaw_target = attitude.yaw;
+	if (lps22hb_init(lps22hb))
+    module_init_failed(MODULE_FAILED_LPS22HB);
+  
+	if (icm20948_init(1125, GYRO_2000_DPS, ACCEL_16G, LP_BW_119HZ))
+    module_init_failed(MODULE_FAILED_ICM20948);
+
+  if (ak09916_init(AK09916_100HZ_MODE))
+    module_init_failed(MODULE_FAILED_AK09916);
+
+  icm20948_read_axis6(&sensor.ax, &sensor.ay, &sensor.az,
+                      &sensor.gx, &sensor.gy, &sensor.gz);
+  ak09916_read_data(&sensor.mx, &sensor.my, &sensor.mz);
+  enu2ned(&sensor.ax, &sensor.ay, &sensor.az);
+  enu2ned(&sensor.mx, &sensor.my, &sensor.mz);
+  ahrs_init(sensor.ax, sensor.ay, sensor.az,
+            sensor.mx, sensor.my, sensor.mz);
+  // ahrs_init_imu(sensor.ax, sensor.ay, sensor.az);
+  ahrs2euler(&att.roll, &att.pitch, &att.yaw);
+  att.yaw_target = att.yaw;
 #endif
 
   set_bus_mode(BUS_INTERRUPT_MODE); /* set bus to non blocking mode */
@@ -396,11 +379,11 @@ int main(void)
   configASSERT(status == pdPASS);
 #endif
 #ifdef GPS_TASK
-  status = xTaskCreate(gps_task, "gps_task", 400, NULL, 3, &gps_handler);
+  status = xTaskCreate(gps_task, "gps_task", 200, NULL, 3, &gps_handler);
   configASSERT(status == pdPASS);
 #endif
 #ifdef SD_TASK
-  status = xTaskCreate(sd_task, "sd_task", 800, NULL, 3, &sd_handler);
+  status = xTaskCreate(sd_task, "sd_task", 700, NULL, 3, &sd_handler);
   configASSERT(status == pdPASS);
 #endif
 #ifdef ADC_TASK
@@ -412,7 +395,7 @@ int main(void)
   configASSERT(status == pdPASS);
 #endif
 #ifdef MSG_TASK
-	status = xTaskCreate(msg_task, "msg_task", 400, NULL, 1, &msg_handler);
+	status = xTaskCreate(msg_task, "msg_task", 500, NULL, 1, &msg_handler);
 	configASSERT(status == pdPASS);
 #endif
 	vTaskStartScheduler();
@@ -481,7 +464,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
   if (GPIO_Pin == NRF_IRQ_Pin) {
-    nrf24l01p_rxtx(payload.bytes, ack_payload.bytes, ACK_PAYLOAD_WIDTH);
+    nrf24l01p_rxtx((uint8_t *)&pl, (uint8_t *)&ack_pl, ACK_PAYLOAD_WIDTH);
     vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
   }
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
@@ -546,6 +529,7 @@ void USART2_IRQHandler(void)
 
   if (USART2->SR & USART_SR_RXNE) {
     *gps_rx_buf_ptr = (uint8_t)USART2->DR;
+
     if (*gps_rx_buf_ptr == '\n') {
       BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
@@ -565,11 +549,6 @@ void USART2_IRQHandler(void)
 /* Task Function */
 static void radio_task(void *param)
 {
-  struct attitude *att = &attitude;
-  struct position *pos = &position;
-  struct payload *pl = &payload.data;
-  uint16_t *thro = &throttle;
-  struct ctrl_param *ctrl = &ctrl_param;
   uint8_t start_flag = 1;
 
   while (1) {
@@ -579,19 +558,17 @@ static void radio_task(void *param)
     }
     ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
     /* decode payload */
-    if (pl->throttle < MAX_THROTTLE && pl->throttle >= 0)
-      *thro = pl->throttle;
-    att->roll_target = (float)pl->roll_target * 9.587378e-5f;
-    att->pitch_target = (float)pl->pitch_target * 9.587378e-5f;
+    if (pl.throttle < MAX_THROTTLE && pl.throttle >= 0)
+      throttle = pl.throttle;
+    decode_payload_radius(pl.roll_target, att.roll_target);
+    decode_payload_radius(pl.roll_target, att.roll_target);
     // if (pl->yaw_target > 1.f || pl->yaw_target < -1.f)
     //   att->yaw_target += (float)pl->yaw_target * 9.587378e-5f;
-
-    pos->height_target = (float)pl->height_target * 0.001f;
-
-    ctrl->P = (float)pl->P * 0.05f;
-    ctrl->I = (float)pl->I * 0.05f;
-    ctrl->D = (float)pl->D * 0.05f;
-    ctrl->mode = pl->mode;
+    decode_payload_height(pl.height_target, pos.height_target);
+    decode_payload_ctrl_gain(pl.P, ctrl_param.P);
+    decode_payload_ctrl_gain(pl.I, ctrl_param.I);
+    decode_payload_ctrl_gain(pl.D, ctrl_param.D);
+    ctrl_param.mode = pl.mode;
   }
 }
 
@@ -607,9 +584,6 @@ void enu2ned(float *x, float *y, float *z)
 static void sensor_task(void *param)
 {
   TickType_t mag_tick = 0, baro_tick = 0;
-  struct sensor_data *sensor = &sensor_data;
-  struct attitude *att = &attitude;
-  struct position *pos = &position;
   float dt = TIME_PER_TICK;
   float ax = 0, ay = 0, az = 0;
   float gx = 0, gy = 0, gz = 0;
@@ -624,12 +598,12 @@ static void sensor_task(void *param)
       gz *= DEG2RAD;
       enu2ned(&gx, &gy, &gz);
       enu2ned(&ax, &ay, &az);     
-      sensor->ax = ax;
-      sensor->ay = ay;
-      sensor->az = az;
-      sensor->gx = gx;
-      sensor->gy = gy;
-      sensor->gz = gz;
+      sensor.ax = ax;
+      sensor.ay = ay;
+      sensor.az = az;
+      sensor.gx = gx;
+      sensor.gy = gy;
+      sensor.gz = gz;
     }
     if (mag_tick == pdMS_TO_TICKS(10)) {
       if (!ak09916_read_data(&mx, &my, &mz)) {
@@ -639,9 +613,9 @@ static void sensor_task(void *param)
         if (mag_square > 625.f && mag_square < 4225.f) {
           /* transform axis to attitude form */
           enu2ned(&mx, &my, &mz);
-          sensor->mx = mx;
-          sensor->my = my;
-          sensor->mz = mz;
+          sensor.mx = mx;
+          sensor.my = my;
+          sensor.mz = mz;
           mag_err = 0;
         } else {
           mag_err = 1;
@@ -653,10 +627,10 @@ static void sensor_task(void *param)
     }
     if (baro_tick == pdMS_TO_TICKS(20)) {
       if (!(*lps22hb_read_data)(&press, &temp)) {
-        sensor->pressure = press;
-        sensor->temperature = temp;
-        pos->height = (powf(1013.25 / press, 1 / 5.257) - 1.0) *
-                      (temp + 273.15) / 0.0065;
+        sensor.pressure = press;
+        sensor.temperature = temp;
+        pos.height = (powf(1013.25 / press, 1 / 5.257) - 1.0) *
+                     (temp + 273.15) / 0.0065;
       }
       baro_tick = 0;
     }
@@ -667,8 +641,8 @@ static void sensor_task(void *param)
       ahrs_update(gx, gy, gz, ax, ay, az, mx, my, mz, dt);
     else
       ahrs_update_imu(gx, gy, gz, ax, ay, az, dt);
-    ahrs2euler(&att->roll, &att->pitch, &att->yaw);
-    ahrs2quat(att->q);
+    ahrs2euler(&att.roll, &att.pitch, &att.yaw);
+    ahrs2quat(att.q);
   
     vTaskDelay(1);
   }
@@ -676,15 +650,13 @@ static void sensor_task(void *param)
 
 static void tof_task(void *param)
 {
-  uint16_t *sensor_d = &sensor_data.distance;
-  float *pos_d = &position.distance;
   uint16_t d;
 
   while (1) {
     if (vl53l0x_is_range_ready()) {
           if (!vl53l0x_get_distance(&d)) {
-            *sensor_d = d;
-            *pos_d = (float)d * 0.001;
+            sensor.distance = d;
+            pos.distance = (float)d * 0.001;
           }
     }
     vTaskDelay(pdMS_TO_TICKS(20));
@@ -730,7 +702,7 @@ static void sd_task(void *param)
 
       if (pass_tick < pdMS_TO_TICKS(10000)) {
         vTaskSuspendAll();
-        memcpy(&tmp, &sensor_data, sizeof(struct sensor_data));
+        memcpy(&tmp, &sensor, sizeof(struct sensor_data));
         xTaskResumeAll();
         len = snprintf(buffer, 256, "tick: %ld, ax: %.2f, ay: %.2f, az: %.2f, "
                                     "gx: %.2f, gy: %.2f, gz: %.2f, "
@@ -752,7 +724,6 @@ static void sd_task(void *param)
 
 static void adc_task(void *param)
 {
-  float *voltage = &battery_voltage;
   uint16_t data[2];
   uint8_t start_flag = 1;
 
@@ -763,7 +734,7 @@ static void adc_task(void *param)
     }
     ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
     /* voltage = adc / 4096 * 3.3 / 1.5 * 8.05 */
-    *voltage = (float)data[0] * 0.0043237304f;
+    battery_voltage = (float)data[0] * 0.0043237304f;
     /* current = ? */
 
   }
@@ -816,10 +787,6 @@ uint16_t thrust2duty(float thrust)
 
 static void ctrl_task(void *param)
 {
-  struct attitude *att = &attitude;
-  struct position *pos = &position;
-  struct ctrl_param *ctrl = &ctrl_param;
-  uint16_t *thro = &throttle;
   uint16_t thro_duty;
   float thro_thrust;
   float q[4];
@@ -839,15 +806,15 @@ static void ctrl_task(void *param)
    * M2 (CW)  M4 (CCW) */
   while (1) {
     vTaskSuspendAll();
-    thro_duty = *thro;
-    memcpy(q, att->q, 4 * sizeof(float));
-    sp_r = att->roll_target;
-    sp_p = att->pitch_target;
-    sp_y = att->yaw_target;
-    P = ctrl->P;
-    I = ctrl->I;
-    D = ctrl->D;
-    mode = ctrl->mode;
+    thro_duty = throttle;
+    memcpy(q, att.q, 4 * sizeof(float));
+    sp_r = att.roll_target;
+    sp_p = att.pitch_target;
+    sp_y = att.yaw_target;
+    P = ctrl_param.P;
+    I = ctrl_param.I;
+    D = ctrl_param.D;
+    mode = ctrl_param.mode;
     xTaskResumeAll();
 
     if (thro_duty < 200) {
@@ -895,16 +862,11 @@ static void ctrl_task(void *param)
 static void msg_task(void *param)
 {
   TickType_t current_tick, last_tick = 0, pass_tick = 0;
-  struct sensor_data *sensor = &sensor_data;
-	struct attitude *att = &attitude;
-  struct position *pos = &position;
-  float *voltage = &battery_voltage;
-  struct ack_payload *ack_pl = &ack_payload.data;
-  uint16_t *thro = &throttle;
-  struct ctrl_param *ctrl = &ctrl_param;
   BaseType_t radio_wm = 0, sensor_wm = 0, tof_wm = 0, gps_wm = 0;
   BaseType_t sd_wm = 0, adc_wm = 0, ctrl_wm = 0, msg_wm = 0;
   BaseType_t min_remaining, remaining;
+  char msg[500];
+  uint16_t len;
 
 	while (1) {
     current_tick = xTaskGetTickCount();
@@ -912,16 +874,16 @@ static void msg_task(void *param)
     last_tick = current_tick;
     /* encode ack payload */
     vTaskSuspendAll();
-    ack_pl->roll = (int16_t)(att->roll * 10430.378f);
-    ack_pl->pitch = (int16_t)(att->pitch * 10430.378f);
-    ack_pl->yaw = (int16_t)(att->yaw * 10430.378f);
-    ack_pl->motor[0] = motor[0];
-    ack_pl->motor[1] = motor[1];
-    ack_pl->motor[2] = motor[2];
-    ack_pl->motor[3] = motor[3];
-    ack_pl->throttle = *thro;
-    ack_pl->height = (int16_t)(pos->height * 100.f);
-    ack_pl->voltage = (uint8_t)(*voltage * 10.f);
+    ack_pl.roll = (int16_t)(att.roll * 10430.378f);
+    ack_pl.pitch = (int16_t)(att.pitch * 10430.378f);
+    ack_pl.yaw = (int16_t)(att.yaw * 10430.378f);
+    ack_pl.motor[0] = motor[0];
+    ack_pl.motor[1] = motor[1];
+    ack_pl.motor[2] = motor[2];
+    ack_pl.motor[3] = motor[3];
+    ack_pl.throttle = throttle;
+    ack_pl.height = (int16_t)(pos.height * 100.f);
+    ack_pl.voltage = (uint8_t)(battery_voltage * 10.f);
     xTaskResumeAll();
 
     radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
@@ -936,28 +898,27 @@ static void msg_task(void *param)
     min_remaining = xPortGetMinimumEverFreeHeapSize();
     remaining = xPortGetFreeHeapSize();
 
-		len = snprintf((char *)msg, MSG_MAX_LEN,
-			             "r: %.3f, p: %.3f, y: %.3f, "
+		len = snprintf(msg, 500, "r: %.3f, p: %.3f, y: %.3f, "
                    "rsp: %.3f, psp: %.3f, ysp: %.3f\r\n"
                    "h: %.2f, d: %d, v: %.2f, throttle: %d\r\n"
                    "m0: %d, m1: %d, m2: %d, m3: %d\r\n"
                    "P: %.2f, I: %.2f, D: %.2f, crash: %d\r\n"
-                   "stack wm:\n\r"
+                   "stack wm:\r\n"
                    "radio: %ld, sensor: %ld, tof, %ld, gps: %ld\r\n"
                    "sd: %ld, adc: %ld, ctrl: %ld, msg: %ld\r\n"
                    "min rm: %ld, cur rm: %ld\r\n"
                    "pass tick: %ld\r\n"
                    "%s",
-			             att->roll, att->pitch, att->yaw,
-                   att->roll_target, att->pitch_target, att->yaw_target,
-             		   pos->height, sensor->distance, *voltage, *thro,
+			             att.roll, att.pitch, att.yaw,
+                   att.roll_target, att.pitch_target, att.yaw_target,
+             		   pos.height, sensor.distance, battery_voltage, throttle,
                    motor[0], motor[1], motor[2], motor[3],
-                   ctrl->P, ctrl->I, ctrl->D, ack_pl->event,
+                   ctrl_param.P, ctrl_param.I, ctrl_param.D, ack_pl.event,
                    radio_wm, sensor_wm, tof_wm, gps_wm,
                    sd_wm, adc_wm, ctrl_wm, msg_wm,
                    min_remaining, remaining, pass_tick,
                    gps_buffer[gps_idle_buf_id]);
-    CDC_Transmit_FS(msg, len);
+    CDC_Transmit_FS((uint8_t *)msg, len);
     vTaskDelay(pdMS_TO_TICKS(200));
 	}
 }
