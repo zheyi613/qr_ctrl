@@ -33,7 +33,7 @@
 #include "dwt_delay.h"
 #include "FreeRTOS.h"
 #include "task.h"
-#include "semphr.h"
+#include "stream_buffer.h"
 #include "rtos_bus.h"
 #include "lps22hb.h"
 #include "icm20948.h"
@@ -92,6 +92,7 @@ enum {
 #define DEG2RAD            0.017453292F
 // #define ESC_CALIBRATION
 
+#define SD_STREAM_BUFFER_SIZE 1024
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -117,6 +118,8 @@ TaskHandle_t sd_handler;
 TaskHandle_t adc_handler;
 TaskHandle_t ctrl_handler;
 TaskHandle_t msg_handler;
+
+StreamBufferHandle_t sd_buf_handler = NULL;
 
 struct payload pl;
 struct ack_payload ack_pl;
@@ -198,6 +201,9 @@ void module_init_failed(enum module_init_failed_id id)
     break;
   case MODULE_FAILED_TOF:
     len = snprintf(msg, 100, "Initialize TOF module failed...\n");
+    break;
+  case MODULE_FAILED_LPS22HB:
+    len = snprintf(msg, 100, "Initialize LPS22HB failed...\n");
     break;
   case MODULE_FAILED_ICM20948:
     len = snprintf(msg, 100, "Initialize ICM-20948 failed...\n");
@@ -590,6 +596,16 @@ static void sensor_task(void *param)
   float press, temp;
   uint8_t mag_err = 1;
 
+  struct tmp_data {
+    TickType_t cur_tick;
+    float ax;
+    float ay;
+    float az;
+    float gx;
+    float gy;
+    float gz;
+  } tmp;
+
   while (1) {
     if (!icm20948_read_axis6(&ax, &ay, &az, &gx, &gy, &gz)) {
       gx *= DEG2RAD;
@@ -643,6 +659,16 @@ static void sensor_task(void *param)
     ahrs2euler(&att.roll, &att.pitch, &att.yaw);
     ahrs2quat(att.q);
   
+    if (sd_buf_handler != NULL) {
+      tmp.cur_tick = xTaskGetTickCount();
+      if (tmp.cur_tick < pdMS_TO_TICKS(10000)) {
+        memcpy(&tmp.ax, &sensor.ax, 24);
+
+        if (xStreamBufferBytesAvailable(sd_buf_handler) >= sizeof(struct tmp_data))
+          xStreamBufferSend(sd_buf_handler, &tmp, sizeof(struct tmp_data), 1);
+      }
+    }
+
     vTaskDelay(1);
   }
 }
@@ -684,7 +710,7 @@ static void sd_task(void *param)
   FATFS fs;
   FIL fil;
   struct sensor_data tmp;
-  char buffer[256];
+  char buffer[512];
   UINT len, rm;
   TickType_t start_tick, cur_tick, pass_tick;
   uint8_t process = 0;
@@ -693,31 +719,55 @@ static void sd_task(void *param)
     if (process == 0) {
       f_mount(&fs, "", 0);
       f_open(&fil, "uav_rec.txt", FA_CREATE_ALWAYS | FA_READ | FA_WRITE);
-      start_tick = xTaskGetTickCount();
-      cur_tick = start_tick;
-      process = 1;
-    } else if (process == 1) {
-      pass_tick = cur_tick - start_tick;
-
-      if (pass_tick < pdMS_TO_TICKS(10000)) {
-        vTaskSuspendAll();
-        memcpy(&tmp, &sensor, sizeof(struct sensor_data));
-        xTaskResumeAll();
-        len = snprintf(buffer, 256, "tick: %ld, ax: %.2f, ay: %.2f, az: %.2f, "
-                                    "gx: %.2f, gy: %.2f, gz: %.2f, "
-                                    "p: %.2f, t: %.2f, d: %d\n",
-                                    cur_tick, tmp.ax, tmp.ay, tmp.az,
-                                    tmp.gx, tmp.gy, tmp.gz, tmp.pressure,
-                                    tmp.temperature, tmp.distance);
-        f_write(&fil, buffer, len, &rm);
-      } else {
+      sd_buf_handler = xStreamBufferCreate(SD_STREAM_BUFFER_SIZE, 512);
+      if (sd_buf_handler == NULL) {
         f_close(&fil);
         f_mount(NULL, "", 0);
         SEGGER_SYSVIEW_Print("sd_close");
+        process = 1;
+      }
+    } else if (process == 1) {
+      len = xStreamBufferReceive(sd_buf_handler, buffer, 512,
+                                  pdMS_TO_TICKS(1000));
+      if (len < 512) {
+        f_write(&fil, buffer, len, &rm);
+        f_close(&fil);
+        f_mount(NULL, "", 0);
+        vStreamBufferDelete(sd_buf_handler);
         process = 2;
+        SEGGER_SYSVIEW_Print("sd_close");
+      } else {
+        f_write(&fil, buffer, len, &rm);
       }
     }
-    vTaskDelayUntil(&cur_tick, pdMS_TO_TICKS(100));
+    // if (process == 0) {
+    //   f_mount(&fs, "", 0);
+    //   f_open(&fil, "uav_rec.txt", FA_CREATE_ALWAYS | FA_READ | FA_WRITE);
+    //   start_tick = xTaskGetTickCount();
+    //   cur_tick = start_tick;
+    //   process = 1;
+    // } else if (process == 1) {
+    //   pass_tick = cur_tick - start_tick;
+
+    //   if (pass_tick < pdMS_TO_TICKS(10000)) {
+    //     vTaskSuspendAll();
+    //     memcpy(&tmp, &sensor, sizeof(struct sensor_data));
+    //     xTaskResumeAll();
+    //     len = snprintf(buffer, 256, "tick: %ld, ax: %.2f, ay: %.2f, az: %.2f, "
+    //                                 "gx: %.2f, gy: %.2f, gz: %.2f, "
+    //                                 "p: %.2f, t: %.2f, d: %d\n",
+    //                                 cur_tick, tmp.ax, tmp.ay, tmp.az,
+    //                                 tmp.gx, tmp.gy, tmp.gz, tmp.pressure,
+    //                                 tmp.temperature, tmp.distance);
+    //     f_write(&fil, buffer, len, &rm);
+    //   } else {
+    //     f_close(&fil);
+    //     f_mount(NULL, "", 0);
+    //     SEGGER_SYSVIEW_Print("sd_close");
+    //     process = 2;
+    //   }
+    // }
+    // vTaskDelayUntil(&cur_tick, pdMS_TO_TICKS(100));
   }
 }
 
