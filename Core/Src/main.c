@@ -144,7 +144,10 @@ struct position {
   float height_target;
 } pos;
 
-static float battery_voltage = 0;
+struct battery {
+  float voltage;
+  float current;
+} bat;
 
 uint16_t throttle;
 uint16_t motor[4];
@@ -156,7 +159,7 @@ struct ctrl_parameter {
   uint8_t mode;
 } ctrl_param;
 
-/* variable of sd spi timer (ms) */
+/* Variable of sd spi timer (ms) */
 WORD Timer1, Timer2;
 
 /* GPS buffer */
@@ -267,6 +270,7 @@ int main(void)
   memset(&sensor, 0, sizeof(struct sensor_data));
   memset(&att, 0, sizeof(struct attitude));
   memset(&pos, 0, sizeof(struct position));
+  memset(&bat, 0, sizeof(struct battery));
   memset(&pl, 0, PAYLOAD_WIDTH);
   memset(&ack_pl, 0, ACK_PAYLOAD_WIDTH);
   memset(&ctrl_param, 0, sizeof(struct ctrl_parameter));
@@ -559,16 +563,16 @@ static void radio_task(void *param)
     ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
     /* decode payload */
     if (pl.throttle < MAX_THROTTLE && pl.throttle >= 0)
-      throttle = pl.throttle;
-    decode_payload_radius(pl.roll_target, att.roll_target);
-    decode_payload_radius(pl.roll_target, att.roll_target);
+      throttle = DECODE_PAYLOAD_THROTTLE(pl.throttle);
+    att.roll_target = DECODE_PAYLOAD_RADIUS(pl.roll_target);
+    att.pitch_target = DECODE_PAYLOAD_RADIUS(pl.pitch_target);
     // if (pl->yaw_target > 1.f || pl->yaw_target < -1.f)
-    //   att->yaw_target += (float)pl->yaw_target * 9.587378e-5f;
-    decode_payload_height(pl.height_target, pos.height_target);
-    decode_payload_ctrl_gain(pl.P, ctrl_param.P);
-    decode_payload_ctrl_gain(pl.I, ctrl_param.I);
-    decode_payload_ctrl_gain(pl.D, ctrl_param.D);
-    ctrl_param.mode = pl.mode;
+    //   att->yaw_target += DECODE_PAYLOAD_RADIUS(pl.yaw_target);
+    pos.height_target = DECODE_PAYLOAD_HEIGHT(pl.height_target);
+    ctrl_param.P = DECODE_PAYLOAD_CTRL_GAIN(pl.P);
+    ctrl_param.I = DECODE_PAYLOAD_CTRL_GAIN(pl.I);
+    ctrl_param.D = DECODE_PAYLOAD_CTRL_GAIN(pl.D);
+    ctrl_param.mode = DECODE_PAYLOAD_CTRL_MODE(pl.mode);
   }
 }
 
@@ -585,10 +589,9 @@ static void sensor_task(void *param)
 {
   TickType_t mag_tick = 0, baro_tick = 0;
   float dt = TIME_PER_TICK;
-  float ax = 0, ay = 0, az = 0;
-  float gx = 0, gy = 0, gz = 0;
-  float mx = 0, my = 0, mz = 0, mag_square;
-  float press = 0, temp = 0;
+  float ax, ay, az, gx, gy, gz;
+  float mx, my, mz, mag_square;
+  float press, temp;
   uint8_t mag_err = 1;
 
   while (1) {
@@ -693,7 +696,7 @@ static void sd_task(void *param)
   while(1) {
     if (process == 0) {
       f_mount(&fs, "", 0);
-      f_open(&fil, "test1.txt", FA_CREATE_ALWAYS | FA_READ | FA_WRITE);
+      f_open(&fil, "uav_rec.txt", FA_CREATE_ALWAYS | FA_READ | FA_WRITE);
       start_tick = xTaskGetTickCount();
       cur_tick = start_tick;
       process = 1;
@@ -733,10 +736,11 @@ static void adc_task(void *param)
       start_flag = 0;
     }
     ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
-    /* voltage = adc / 4096 * 3.3 / 1.5 * 8.05 */
-    battery_voltage = (float)data[0] * 0.0043237304f;
-    /* current = ? */
-
+    /* voltage = adc / 4096 * 3.3 / 10k * 51k */
+    bat.voltage = (float)data[0] * 0.0041088867f;
+    /* current = ((adc / 4096 * 3.3) - 2.4677) / 0.0328 */
+    bat.current = (float)data[1] * 0.00080566406f - 2.4677f;
+    bat.current /= 0.0328f;
   }
 }
 
@@ -865,7 +869,7 @@ static void msg_task(void *param)
   BaseType_t radio_wm = 0, sensor_wm = 0, tof_wm = 0, gps_wm = 0;
   BaseType_t sd_wm = 0, adc_wm = 0, ctrl_wm = 0, msg_wm = 0;
   BaseType_t min_remaining, remaining;
-  char msg[500];
+  char msg[512];
   uint16_t len;
 
 	while (1) {
@@ -874,16 +878,16 @@ static void msg_task(void *param)
     last_tick = current_tick;
     /* encode ack payload */
     vTaskSuspendAll();
-    ack_pl.roll = (int16_t)(att.roll * 10430.378f);
-    ack_pl.pitch = (int16_t)(att.pitch * 10430.378f);
-    ack_pl.yaw = (int16_t)(att.yaw * 10430.378f);
-    ack_pl.motor[0] = motor[0];
-    ack_pl.motor[1] = motor[1];
-    ack_pl.motor[2] = motor[2];
-    ack_pl.motor[3] = motor[3];
-    ack_pl.throttle = throttle;
-    ack_pl.height = (int16_t)(pos.height * 100.f);
-    ack_pl.voltage = (uint8_t)(battery_voltage * 10.f);
+    ack_pl.throttle = ENCODE_PAYLOAD_THROTTLE(throttle);
+    ack_pl.motor[0] = ENCODE_PAYLOAD_MOTOR(motor[0]);
+    ack_pl.motor[1] = ENCODE_PAYLOAD_MOTOR(motor[1]);
+    ack_pl.motor[2] = ENCODE_PAYLOAD_MOTOR(motor[2]);
+    ack_pl.motor[3] = ENCODE_PAYLOAD_MOTOR(motor[3]);
+    ack_pl.roll = ENCODE_PAYLOAD_RADIUS(att.roll);
+    ack_pl.pitch = ENCODE_PAYLOAD_RADIUS(att.pitch);
+    ack_pl.yaw = ENCODE_PAYLOAD_RADIUS(att.yaw);
+    ack_pl.height = ENCODE_PAYLOAD_HEIGHT(pos.height);
+    ack_pl.voltage = ENCODE_PAYLOAD_VOLTAGE(bat.voltage);
     xTaskResumeAll();
 
     radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
@@ -898,10 +902,10 @@ static void msg_task(void *param)
     min_remaining = xPortGetMinimumEverFreeHeapSize();
     remaining = xPortGetFreeHeapSize();
 
-		len = snprintf(msg, 500, "r: %.3f, p: %.3f, y: %.3f, "
+		len = snprintf(msg, 512, "r: %.3f, p: %.3f, y: %.3f, "
                    "rsp: %.3f, psp: %.3f, ysp: %.3f\r\n"
-                   "h: %.2f, d: %d, v: %.2f, throttle: %d\r\n"
-                   "m0: %d, m1: %d, m2: %d, m3: %d\r\n"
+                   "h: %.2f, d: %d, V: %.2f, I: %.2F\r\n"
+                   "throttle: %d, m0: %d, m1: %d, m2: %d, m3: %d\r\n"
                    "P: %.2f, I: %.2f, D: %.2f, crash: %d\r\n"
                    "stack wm:\r\n"
                    "radio: %ld, sensor: %ld, tof, %ld, gps: %ld\r\n"
@@ -911,8 +915,8 @@ static void msg_task(void *param)
                    "%s",
 			             att.roll, att.pitch, att.yaw,
                    att.roll_target, att.pitch_target, att.yaw_target,
-             		   pos.height, sensor.distance, battery_voltage, throttle,
-                   motor[0], motor[1], motor[2], motor[3],
+             		   pos.height, sensor.distance, bat.voltage, bat.current,
+                   throttle, motor[0], motor[1], motor[2], motor[3],
                    ctrl_param.P, ctrl_param.I, ctrl_param.D, ack_pl.event,
                    radio_wm, sensor_wm, tof_wm, gps_wm,
                    sd_wm, adc_wm, ctrl_wm, msg_wm,
@@ -942,9 +946,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   }
   /* USER CODE BEGIN Callback 1 */
   if (htim->Instance == TIM9) {
-    uint16_t count;
+    uint16_t count = Timer1;
 
-    count = Timer1;
     if (count)
       Timer1 = --count;
     count = Timer2;

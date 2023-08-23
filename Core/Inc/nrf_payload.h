@@ -42,27 +42,21 @@ struct ack_payload {
 #define DECODING_HEIGHT         0.001F
 #define DECODING_CTRL_GAIN      0.05F
 
-#define decode_payload_throttle(src, dst)       \
-        dst = src
-#define decode_payload_radius(src, dst)         \
-        dst = (float)(src) * DECODING_RADIUS
-#define decode_payload_height(src, dst)         \
-        dst = (float)(src) * DECODING_HEIGHT
-#define decode_payload_ctrl_gain(src, dst)      \
-        dst = (float)(src) * DECODING_CTRL_GAIN
+#define DECODE_PAYLOAD_THROTTLE(x)      x
+#define DECODE_PAYLOAD_RADIUS(x)        (float)(x) * DECODING_RADIUS
+#define DECODE_PAYLOAD_HEIGHT(x)        (float)(x) * DECODING_HEIGHT
+#define DECODE_PAYLOAD_CTRL_GAIN(x)     (float)(x) * DECODING_CTRL_GAIN
+#define DECODE_PAYLOAD_CTRL_MODE(x)     x
 
 /* Encode for payload */
-#define ENCODING_RADIUS         10430.374
+#define ENCODING_RADIUS         10430.378F
 #define ENCODING_HEIGHT         100.F
 #define ENCODING_VOLTAGE        10.F
 
-#define encode_payload_throttle(src, dst)       \
-        dst = src
-#define encode_payload_motor(src, dst)          \
-        dst = src
-#define encode_payload_height(src, dst)         \
-        dst = (int16_t)(src * ENCODING_HEIGHT)
-#define encode_payload_voltage(src, dst)        \
-        dst = (uint8_t)(src * ENCODING_VOLTAGE)
+#define ENCODE_PAYLOAD_THROTTLE(x)      x
+#define ENCODE_PAYLOAD_MOTOR(x)         x
+#define ENCODE_PAYLOAD_RADIUS(x)        (int16_t)(x * ENCODING_RADIUS)
+#define ENCODE_PAYLOAD_HEIGHT(x)        (int16_t)(x * ENCODING_HEIGHT)
+#define ENCODE_PAYLOAD_VOLTAGE(x)       (uint8_t)(x * ENCODING_VOLTAGE)
 
 #endif /* NRF_PAYLOAD_H */
