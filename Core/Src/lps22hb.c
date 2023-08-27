@@ -8,10 +8,12 @@
 #include "rtos_bus.h"
 
 /* User serial interface */
-#define read_reg_multi(reg, pData, size)        \
-        i2c_read_multi(&hi2c2, LPS22HB_ADDR << 1, reg, pData, size)
-#define write_reg_multi(reg, pData, size)       \
-        i2c_write_multi(&hi2c2, LPS22HB_ADDR << 1, reg, pData, size)
+#define read_reg_multi(reg, pData, size)        			\
+        i2c_read_multi(&hi2c2, LPS22HB_ADDR << 1, reg, I2C_REG_8BIT,	\
+		       pData, size)
+#define write_reg_multi(reg, pData, size)       			\
+        i2c_write_multi(&hi2c2, LPS22HB_ADDR << 1, reg, I2C_REG_8BIT,	\
+			pData, size)
 
 int (*lps22hb_read_data)(float *press, float *temp);
 

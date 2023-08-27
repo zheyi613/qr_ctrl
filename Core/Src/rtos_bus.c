@@ -22,37 +22,33 @@ void set_bus_mode(enum bus_mode mode)
         bus_int_mode = (uint8_t)mode;
 }
 
-int i2c_write_multi(I2C_HandleTypeDef *hi2c, uint8_t address, uint8_t reg,
-                    uint8_t *data, int16_t size)
+int i2c_write_multi(I2C_HandleTypeDef *hi2c, uint8_t address, uint16_t reg,
+                    uint16_t reg_size, uint8_t *data, uint16_t size)
 {
         int status;
 
         if (bus_int_mode) {
-                status = HAL_I2C_Mem_Write_DMA(hi2c, address, reg,
-                                        I2C_MEMADD_SIZE_8BIT,
-                                        data, size);
+                status = HAL_I2C_Mem_Write_DMA(hi2c, address, reg, reg_size,
+                                               data, size);
                 ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
         } else {
-                status = HAL_I2C_Mem_Write(hi2c, address, reg,
-                                           I2C_MEMADD_SIZE_8BIT,
+                status = HAL_I2C_Mem_Write(hi2c, address, reg, reg_size,
                                            data, size, 1);
         }
         return status;
 }
 
-int i2c_read_multi(I2C_HandleTypeDef *hi2c, uint8_t address, uint8_t reg,
-                   uint8_t *data, int16_t size)
+int i2c_read_multi(I2C_HandleTypeDef *hi2c, uint8_t address, uint16_t reg,
+                   uint16_t reg_size, uint8_t *data, uint16_t size)
 {
         int status;
 
         if (bus_int_mode) {
-                status = HAL_I2C_Mem_Read_DMA(hi2c, address, reg,
-                                        I2C_MEMADD_SIZE_8BIT,
-                                        data, size);
+                status = HAL_I2C_Mem_Read_DMA(hi2c, address, reg, reg_size,
+                                              data, size);
                 ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
         } else {
-                status = HAL_I2C_Mem_Read(hi2c, address, reg,
-                                          I2C_MEMADD_SIZE_8BIT,
+                status = HAL_I2C_Mem_Read(hi2c, address, reg, reg_size,
                                           data, size, 1);
         }
         return status;
