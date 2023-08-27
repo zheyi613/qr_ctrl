@@ -112,7 +112,10 @@ enum {
 /* Select SD recording data */
 #define REC_IMU
 #define REC_MAG
-// #define REC_BARO
+#define REC_BARO
+#define REC_TOF
+#define REC_BATTERY
+#define REC_CTRL
 
 /* USER CODE END PD */
 
@@ -374,9 +377,9 @@ int main(void)
     module_init_failed(MODULE_FAILED_TOF);
   if (VL53L1X_SetDistanceMode(VL53L1X_ADDR, 2))
     module_init_failed(MODULE_FAILED_TOF);
-  if (VL53L1X_SetTimingBudgetInMs(VL53L1X_ADDR, 20))
+  if (VL53L1X_SetTimingBudgetInMs(VL53L1X_ADDR, 33))
     module_init_failed(MODULE_FAILED_TOF);
-  if (VL53L1X_SetInterMeasurementInMs(VL53L1X_ADDR, 20))
+  if (VL53L1X_SetInterMeasurementInMs(VL53L1X_ADDR, 50))
     module_init_failed(MODULE_FAILED_TOF);
   if (VL53L1X_StartRanging(VL53L1X_ADDR))
     module_init_failed(MODULE_FAILED_TOF);
@@ -437,7 +440,7 @@ int main(void)
   configASSERT(status == pdPASS);
 #endif
 #ifdef TOF_TASK
-  status = xTaskCreate(tof_task, "tof_task", 400, NULL, 3, &tof_handler);
+  status = xTaskCreate(tof_task, "tof_task", 200, NULL, 3, &tof_handler);
   configASSERT(status == pdPASS);
 #endif
 #ifdef GPS_TASK
@@ -675,7 +678,9 @@ void rec_data(void *data)
       size = sizeof(struct rec_ctrl);
       break;
     }
+    portENTER_CRITICAL();
     write_size = xStreamBufferSend(sd_buf_handler, data, size, 0);
+    portEXIT_CRITICAL();
     if (write_size < size) {
       rec_status &= ~REC_STATUS_PROCESS_MASK;
       rec_status |= REC_STATUS_WRITE_BUFFER_MISSING |
@@ -752,7 +757,7 @@ static void sensor_task(void *param)
         pos.height = (powf(1013.25 / press, 1 / 5.257) - 1.0) *
                      (temp + 273.15) / 0.0065;
 #ifdef REC_BARO
-        memcpy(&baro_data.press, &sensor.press, 8);
+        memcpy(&baro_data.press, &sensor.pressure, 8);
         baro_data.height = pos.height;
         rec_data(&baro_data);
 #endif
@@ -775,9 +780,12 @@ static void sensor_task(void *param)
 
 static void tof_task(void *param)
 {
-  uint8_t is_ready;
+  uint8_t is_ready = 0;
   uint8_t range_status;
   uint16_t d;
+  struct rec_tof tof_data = {
+    REC_MARK_TOF, 0, 0
+  };
 
   while (1) {
     VL53L1X_CheckForDataReady(VL53L1X_ADDR, &is_ready);
@@ -790,6 +798,10 @@ static void tof_task(void *param)
         VL53L1X_GetDistance(VL53L1X_ADDR, &d);
         sensor.distance = d;
         pos.distance = (float)d * 0.001;
+#ifdef REC_TOF
+        tof_data.distance = (uint32_t)d;
+        rec_data(&tof_data);
+#endif
       }
       VL53L1X_ClearInterrupt(VL53L1X_ADDR);
     }
@@ -868,6 +880,9 @@ static void adc_task(void *param)
 {
   uint16_t data[2];
   uint8_t start_flag = 1;
+  struct rec_battery bat_data = {
+    REC_MARK_BATTERY, 0, 0, 0
+  };
 
   while (1) {
     if (start_flag) {
@@ -875,11 +890,16 @@ static void adc_task(void *param)
       start_flag = 0;
     }
     ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
-    /* voltage = adc / 4096 * 3.3 / 10k * 51k */
-    bat.voltage = (float)data[0] * 0.0041088867f;
+    /* voltage = adc / 4096 * 3.3 / 10k * (10k + 51k) */
+    bat.voltage = (float)data[0] * 0.0049145507f;
     /* current = ((adc / 4096 * 3.3) - 2.4677) / 0.0328 */
     bat.current = (float)data[1] * 0.00080566406f - 2.4677f;
     bat.current /= 0.0328f;
+#ifdef REC_BATTERY
+    bat_data.voltage = bat.voltage;
+    bat_data.current = bat.current;
+    rec_data(&bat_data);
+#endif
   }
 }
 
@@ -943,6 +963,9 @@ static void ctrl_task(void *param)
   struct PID_param PID_roll;
   struct PID_param PID_pitch;
   struct PID_param PID_yaw;
+  struct rec_ctrl ctrl_data = {
+    REC_MARK_CTRL, 0, 0, {0}
+  };
   /* M1 (CCW) M2 (CW)
    * M4 (CW)  M3 (CCW) */
   /* M1 (CCW) M3 (CW)
@@ -992,6 +1015,11 @@ static void ctrl_task(void *param)
       motor[2] = thrust2duty(thro_thrust - PID_roll.output - PID_pitch.output
                                         - PID_yaw.output);
     }
+#ifdef REC_CTRL
+    ctrl_data.throttle = (uint32_t)thro_duty;
+    memcpy(ctrl_data.motor, motor, sizeof(motor));
+    rec_data(&ctrl_data);
+#endif
     /* arr range for ESC: 2000 - 3999 */
     __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, MOTOR_DUTY_RANGE + motor[0]);
     __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, MOTOR_DUTY_RANGE + motor[1]);
