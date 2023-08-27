@@ -58,7 +58,7 @@
 /* Configure tasks to enable */
 #define RADIO_TASK
 #define SENSOR_TASK
-// #define TOF_TASK
+#define TOF_TASK
 #define GPS_TASK
 #define SD_TASK
 #define ADC_TASK
