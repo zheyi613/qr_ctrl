@@ -38,12 +38,13 @@
 #include "lps22hb.h"
 #include "icm20948.h"
 #include "ak09916.h"
+#include "VL53L1X_api.h"
 #include "nrf24l01p.h"
 #include "nrf_payload.h"
-#include "vl53l0x.h"
 #include "math.h"
 #include "ahrs.h"
 #include "diskio.h"
+#include "sd_record.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -57,12 +58,15 @@
 /* Configure tasks to enable */
 #define RADIO_TASK
 #define SENSOR_TASK
-// #define TOF_TASK
+#define TOF_TASK
 #define GPS_TASK
 #define SD_TASK
 #define ADC_TASK
 #define CTRL_TASK
 #define MSG_TASK
+
+/* ESC calibration mode */
+// #define ESC_CALIBRATION
 
 /* Module initialize failed number */
 enum module_init_failed_id {
@@ -73,26 +77,43 @@ enum module_init_failed_id {
   MODULE_FAILED_AK09916
 };
 
-#define MOTOR_DUTY_RANGE   2000 /* esc standard: 1-2ms, pwm arr: 2000-3999 */
-#define MOTOR_CTRL_RANGE   MOTOR_DUTY_RANGE * 0.2
-#define MOTOR_INITIAL_DUTY 0  /* max: 1999, must more than zero to lock ESC */
-#define MAX_THROTTLE       MOTOR_DUTY_RANGE * 0.9 /* max:  90% duty */
+#define VL53L1X_ADDR        0x52
 
-#define MIN_THRUST         0.35F
-#define MAX_THRUST         7.0F
+#define MOTOR_DUTY_RANGE    2000 /* esc standard: 1-2ms, pwm arr: 2000-3999 */
+#define MOTOR_CTRL_RANGE    MOTOR_DUTY_RANGE * 0.2
+#define MOTOR_INITIAL_DUTY  0  /* max: 1999, must more than zero to lock ESC */
+#define MAX_THROTTLE        MOTOR_DUTY_RANGE * 0.9 /* max:  90% duty */
+
+#define MIN_THRUST          0.35F
+#define MAX_THRUST          7.0F
 
 enum {
   NORMAL_MODE,
   ALTITUDE_MODE
 };
 
-#define TIME_PER_TICK      0.002F
+#define TIME_PER_TICK       0.002F
 
-#define RAD2DEG            57.29577F
-#define DEG2RAD            0.017453292F
-// #define ESC_CALIBRATION
+#define RAD2DEG             57.29577F
+#define DEG2RAD             0.017453292F
 
-#define SD_STREAM_BUFFER_SIZE 1024
+/* GPS buffer size */
+#define GPS_BUFFER_SIZE     256
+
+/* SD card recording buffer size */
+#define SD_BUFFER_SIZE      1024
+#define SD_BUFFER_LEVEL     512
+
+/* SD recording mode configuration */
+#define REC_ONE_CYCLE_MODE
+// #define REC_THROTTLE_TRIGGER_MODE
+#define REC_CYCLE_MS        10000
+
+/* Select SD recording data */
+#define REC_IMU
+#define REC_MAG
+// #define REC_BARO
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -119,7 +140,9 @@ TaskHandle_t adc_handler;
 TaskHandle_t ctrl_handler;
 TaskHandle_t msg_handler;
 
-StreamBufferHandle_t sd_buf_handler = NULL;
+StreamBufferHandle_t sd_buf_handler;
+/* Use sensor task(same as systick) to store current tick */
+TickType_t current_tick;
 
 struct payload pl;
 struct ack_payload ack_pl;
@@ -173,10 +196,17 @@ struct ctrl_parameter {
 /* Variable of sd spi timer (ms) */
 WORD Timer1, Timer2;
 
-/* GPS buffer */
-char gps_buffer[2][256];
+/* SD card recording status */
+#if defined(REC_ONE_CYCLE_MODE) 
+  uint8_t rec_status = REC_STATUS_PROCESS_START;
+#elif defined(REC_THROTTLE_TRIGGER_MODE)
+  uint8_t rec_status = REC_STATUS_PROCESS_IDLE;
+#endif
+/* GPS buffer (transfer by double buffer) */
+char gps_buffer[2][GPS_BUFFER_SIZE];
 char *gps_rx_buf_ptr;
 uint8_t gps_idle_buf_id;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -213,7 +243,6 @@ void module_init_failed(enum module_init_failed_id id)
     break;
   default:
     len = snprintf(msg, 100, "Initialize not defined failed...\n");
-    break;
   }
   while (1) {
     CDC_Transmit_FS((uint8_t *)msg, len);
@@ -285,7 +314,7 @@ int main(void)
   memset(&pl, 0, PAYLOAD_WIDTH);
   memset(&ack_pl, 0, ACK_PAYLOAD_WIDTH);
   memset(&ctrl_param, 0, sizeof(struct ctrl_parameter));
-  memset(gps_buffer, 0, 512);
+  memset(gps_buffer, 0, 2 * GPS_BUFFER_SIZE);
 
 	#ifdef ESC_CALIBRATION
   __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, MOTOR_DUTY_RANGE + 1999);
@@ -312,7 +341,7 @@ int main(void)
   HAL_Delay(5000);
   #endif
   
-  HAL_Delay(100);
+  HAL_Delay(200);
 
   set_bus_mode(BUS_POLLING_MODE); /* set bus to blocking mode */
 
@@ -331,7 +360,25 @@ int main(void)
     module_init_failed(MODULE_FAILED_NRF24L01P);
 #endif
 #ifdef TOF_TASK
-  if (vl53l0x_init(VL53L0X_SENSE_HIGH_SPEED, 20))
+  uint8_t try_count = 10, tof_state = 0;
+  int8_t st = 0;
+  do {
+    st = VL53L1X_BootState(VL53L1X_ADDR, &tof_state);
+  } while (--try_count && !tof_state);
+  if (st != 0)
+    module_init_failed(MODULE_FAILED_TOF);
+
+  if (!tof_state)
+    module_init_failed(MODULE_FAILED_TOF);
+  if (VL53L1X_SensorInit(VL53L1X_ADDR))
+    module_init_failed(MODULE_FAILED_TOF);
+  if (VL53L1X_SetDistanceMode(VL53L1X_ADDR, 2))
+    module_init_failed(MODULE_FAILED_TOF);
+  if (VL53L1X_SetTimingBudgetInMs(VL53L1X_ADDR, 20))
+    module_init_failed(MODULE_FAILED_TOF);
+  if (VL53L1X_SetInterMeasurementInMs(VL53L1X_ADDR, 20))
+    module_init_failed(MODULE_FAILED_TOF);
+  if (VL53L1X_StartRanging(VL53L1X_ADDR))
     module_init_failed(MODULE_FAILED_TOF);
 #endif
 #ifdef SENSOR_TASK
@@ -587,6 +634,56 @@ static void radio_task(void *param)
   }
 }
 
+void rec_data(void *data)
+{
+  uint32_t mark;
+  uint32_t *tick_ptr;
+  size_t size = 0, write_size;
+
+  if ((rec_status & REC_STATUS_PROCESS_MASK) == REC_STATUS_PROCESS_UNDONE) {
+#ifdef REC_ONE_CYCLE_MODE
+    if (current_tick > pdMS_TO_TICKS(REC_CYCLE_MS)) {
+      rec_status &= ~REC_STATUS_PROCESS_MASK;
+      rec_status |= REC_STATUS_PROCESS_END;
+      return;
+    }
+#endif
+    mark = *((uint32_t *)data);
+    tick_ptr = (uint32_t *)(data + 4);
+    *tick_ptr = current_tick;
+
+    switch (mark) {
+    case REC_MARK_IMU:
+      size = sizeof(struct rec_imu);
+      break;
+    case REC_MARK_MAG:
+      size = sizeof(struct rec_mag);
+      break;
+    case REC_MARK_BARO:
+      size = sizeof(struct rec_baro);
+      break;
+    case REC_MARK_TOF:
+      size = sizeof(struct rec_tof);
+      break;
+    case REC_MARK_BATTERY:
+      size = sizeof(struct rec_battery);
+      break;
+    case REC_MARK_ATT:
+      size = sizeof(struct rec_att);
+      break;
+    case REC_MARK_CTRL:
+      size = sizeof(struct rec_ctrl);
+      break;
+    }
+    write_size = xStreamBufferSend(sd_buf_handler, data, size, 0);
+    if (write_size < size) {
+      rec_status &= ~REC_STATUS_PROCESS_MASK;
+      rec_status |= REC_STATUS_WRITE_BUFFER_MISSING |
+                    REC_STATUS_PROCESS_END;
+    }
+  }
+}
+
 static void sensor_task(void *param)
 {
   TickType_t mag_tick = 0, baro_tick = 0;
@@ -595,18 +692,18 @@ static void sensor_task(void *param)
   float mx, my, mz, mag_square;
   float press, temp;
   uint8_t mag_err = 1;
-
-  struct tmp_data {
-    TickType_t cur_tick;
-    float ax;
-    float ay;
-    float az;
-    float gx;
-    float gy;
-    float gz;
-  } tmp;
+  struct rec_imu imu_data = {
+    REC_MARK_IMU, 0, 0, 0, 0, 0, 0, 0,
+  };
+  struct rec_mag mag_data = {
+    REC_MARK_MAG, 0, 0, 0, 0
+  };
+  struct rec_baro baro_data = {
+    REC_MARK_BARO, 0, 0, 0, 0
+  };
 
   while (1) {
+    current_tick = xTaskGetTickCount();
     if (!icm20948_read_axis6(&ax, &ay, &az, &gx, &gy, &gz)) {
       gx *= DEG2RAD;
       gy *= DEG2RAD;
@@ -619,6 +716,10 @@ static void sensor_task(void *param)
       sensor.gx = gx;
       sensor.gy = gy;
       sensor.gz = gz;
+#ifdef REC_IMU
+      memcpy(&imu_data.ax, &sensor.ax, 24);
+      rec_data(&imu_data);
+#endif
     }
     if (mag_tick == pdMS_TO_TICKS(10)) {
       if (!ak09916_read_data(&mx, &my, &mz)) {
@@ -632,6 +733,10 @@ static void sensor_task(void *param)
           sensor.my = my;
           sensor.mz = mz;
           mag_err = 0;
+#ifdef REC_MAG
+          memcpy(&mag_data.mx, &sensor.mx, 12);
+          rec_data(&mag_data);
+#endif
         } else {
           mag_err = 1;
         }
@@ -646,6 +751,11 @@ static void sensor_task(void *param)
         sensor.temperature = temp;
         pos.height = (powf(1013.25 / press, 1 / 5.257) - 1.0) *
                      (temp + 273.15) / 0.0065;
+#ifdef REC_BARO
+        memcpy(&baro_data.press, &sensor.press, 8);
+        baro_data.height = pos.height;
+        rec_data(&baro_data);
+#endif
       }
       baro_tick = 0;
     }
@@ -658,33 +768,32 @@ static void sensor_task(void *param)
       ahrs_update_imu(gx, gy, gz, ax, ay, az, dt);
     ahrs2euler(&att.roll, &att.pitch, &att.yaw);
     ahrs2quat(att.q);
-  
-    if (sd_buf_handler != NULL) {
-      tmp.cur_tick = xTaskGetTickCount();
-      if (tmp.cur_tick < pdMS_TO_TICKS(10000)) {
-        memcpy(&tmp.ax, &sensor.ax, 24);
 
-        if (xStreamBufferBytesAvailable(sd_buf_handler) >= sizeof(struct tmp_data))
-          xStreamBufferSend(sd_buf_handler, &tmp, sizeof(struct tmp_data), 1);
-      }
-    }
-
-    vTaskDelay(1);
+    vTaskDelay(pdMS_TO_TICKS(2));
   }
 }
 
 static void tof_task(void *param)
 {
+  uint8_t is_ready;
+  uint8_t range_status;
   uint16_t d;
 
   while (1) {
-    if (vl53l0x_is_range_ready()) {
-          if (!vl53l0x_get_distance(&d)) {
-            sensor.distance = d;
-            pos.distance = (float)d * 0.001;
-          }
+    VL53L1X_CheckForDataReady(VL53L1X_ADDR, &is_ready);
+
+    if (is_ready) {
+      is_ready = 0;
+      VL53L1X_GetRangeStatus(VL53L1X_ADDR, &range_status);
+      
+      if (!range_status) {
+        VL53L1X_GetDistance(VL53L1X_ADDR, &d);
+        sensor.distance = d;
+        pos.distance = (float)d * 0.001;
+      }
+      VL53L1X_ClearInterrupt(VL53L1X_ADDR);
     }
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
 
@@ -698,8 +807,6 @@ static void gps_task(void *param)
       gps_rx_buf_ptr = gps_buffer[!gps_idle_buf_id];
       __HAL_UART_ENABLE_IT(&huart2, UART_IT_RXNE);
       start_flag = 0;
-      /* Call Task Notify Take to discharge first package */
-      ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
     }
     ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
   }
@@ -709,65 +816,51 @@ static void sd_task(void *param)
 {
   FATFS fs;
   FIL fil;
-  struct sensor_data tmp;
+  FRESULT fres;
   char buffer[512];
-  UINT len, rm;
-  TickType_t start_tick, cur_tick, pass_tick;
-  uint8_t process = 0;
+  UINT size, rm;
+  uint8_t process;
 
   while(1) {
-    if (process == 0) {
+    process = rec_status & REC_STATUS_PROCESS_MASK;
+    if (process == REC_STATUS_PROCESS_START) {
       f_mount(&fs, "", 0);
-      f_open(&fil, "uav_rec.txt", FA_CREATE_ALWAYS | FA_READ | FA_WRITE);
-      sd_buf_handler = xStreamBufferCreate(SD_STREAM_BUFFER_SIZE, 512);
-      if (sd_buf_handler == NULL) {
-        f_close(&fil);
-        f_mount(NULL, "", 0);
-        SEGGER_SYSVIEW_Print("sd_close");
-        process = 1;
-      }
-    } else if (process == 1) {
-      len = xStreamBufferReceive(sd_buf_handler, buffer, 512,
-                                  pdMS_TO_TICKS(1000));
-      if (len < 512) {
-        f_write(&fil, buffer, len, &rm);
-        f_close(&fil);
-        f_mount(NULL, "", 0);
-        vStreamBufferDelete(sd_buf_handler);
-        process = 2;
-        SEGGER_SYSVIEW_Print("sd_close");
-      } else {
-        f_write(&fil, buffer, len, &rm);
-      }
-    }
-    // if (process == 0) {
-    //   f_mount(&fs, "", 0);
-    //   f_open(&fil, "uav_rec.txt", FA_CREATE_ALWAYS | FA_READ | FA_WRITE);
-    //   start_tick = xTaskGetTickCount();
-    //   cur_tick = start_tick;
-    //   process = 1;
-    // } else if (process == 1) {
-    //   pass_tick = cur_tick - start_tick;
+      fres = f_open(&fil, "uav_rec.txt", FA_CREATE_ALWAYS | FA_WRITE | FA_READ);
 
-    //   if (pass_tick < pdMS_TO_TICKS(10000)) {
-    //     vTaskSuspendAll();
-    //     memcpy(&tmp, &sensor, sizeof(struct sensor_data));
-    //     xTaskResumeAll();
-    //     len = snprintf(buffer, 256, "tick: %ld, ax: %.2f, ay: %.2f, az: %.2f, "
-    //                                 "gx: %.2f, gy: %.2f, gz: %.2f, "
-    //                                 "p: %.2f, t: %.2f, d: %d\n",
-    //                                 cur_tick, tmp.ax, tmp.ay, tmp.az,
-    //                                 tmp.gx, tmp.gy, tmp.gz, tmp.pressure,
-    //                                 tmp.temperature, tmp.distance);
-    //     f_write(&fil, buffer, len, &rm);
-    //   } else {
-    //     f_close(&fil);
-    //     f_mount(NULL, "", 0);
-    //     SEGGER_SYSVIEW_Print("sd_close");
-    //     process = 2;
-    //   }
-    // }
-    // vTaskDelayUntil(&cur_tick, pdMS_TO_TICKS(100));
+      if (fres == FR_OK) {
+        sd_buf_handler = xStreamBufferCreate(SD_BUFFER_SIZE, SD_BUFFER_LEVEL);
+
+        if (sd_buf_handler == NULL) {
+          f_close(&fil);
+          f_mount(NULL, "", 0);
+          rec_status = REC_STATUS_PROCESS_IDLE |
+                       REC_STATUS_BUFFER_CREATE_ERROR;
+        } else {
+
+          rec_status = REC_STATUS_PROCESS_UNDONE;
+        }
+      } else {
+        rec_status = REC_STATUS_PROCESS_IDLE | REC_STATUS_FILESYSTEM_ERROR;
+      }
+    } else if (process == REC_STATUS_PROCESS_UNDONE) {
+      size = xStreamBufferReceive(sd_buf_handler, buffer, 512,
+                                  pdMS_TO_TICKS(100));
+      f_write(&fil, buffer, size, &rm);
+
+      if (size != rm) {
+        rec_status &= ~REC_STATUS_PROCESS_MASK;
+        rec_status |= REC_STATUS_PROCESS_END | REC_STATUS_WRITE_SD_ERROR;
+      }
+    } else if (process == REC_STATUS_PROCESS_END) {
+      rec_status &= ~REC_STATUS_PROCESS_MASK;
+      rec_status |= REC_STATUS_PROCESS_IDLE;
+      vStreamBufferDelete(sd_buf_handler);
+      f_close(&fil);
+      f_mount(NULL, "", 0);
+      SEGGER_SYSVIEW_Print("sd_close");
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(1000));
+    }
   }
 }
 
@@ -916,7 +1009,8 @@ static void msg_task(void *param)
   BaseType_t sd_wm = 0, adc_wm = 0, ctrl_wm = 0, msg_wm = 0;
   BaseType_t min_remaining, remaining;
   char msg[512];
-  uint16_t len;
+  uint16_t size;
+  uint8_t watch_rec_status;
 
 	while (1) {
     current_tick = xTaskGetTickCount();
@@ -934,11 +1028,12 @@ static void msg_task(void *param)
     ack_pl.yaw = ENCODE_PAYLOAD_RADIUS(att.yaw);
     ack_pl.height = ENCODE_PAYLOAD_HEIGHT(pos.height);
     ack_pl.voltage = ENCODE_PAYLOAD_VOLTAGE(bat.voltage);
+    watch_rec_status = rec_status;
     xTaskResumeAll();
 
     radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
     sensor_wm = uxTaskGetStackHighWaterMark(sensor_handler);
-    // tof_wm = uxTaskGetStackHighWaterMark(tof_handler);
+    tof_wm = uxTaskGetStackHighWaterMark(tof_handler);
     gps_wm = uxTaskGetStackHighWaterMark(gps_handler);
     sd_wm = uxTaskGetStackHighWaterMark(sd_handler);
     adc_wm = uxTaskGetStackHighWaterMark(adc_handler);
@@ -948,27 +1043,27 @@ static void msg_task(void *param)
     min_remaining = xPortGetMinimumEverFreeHeapSize();
     remaining = xPortGetFreeHeapSize();
 
-		len = snprintf(msg, 512, "r: %.3f, p: %.3f, y: %.3f, "
-                   "rsp: %.3f, psp: %.3f, ysp: %.3f\r\n"
-                   "h: %.2f, d: %d, V: %.2f, I: %.2F\r\n"
-                   "throttle: %d, m0: %d, m1: %d, m2: %d, m3: %d\r\n"
-                   "P: %.2f, I: %.2f, D: %.2f, crash: %d\r\n"
-                   "stack wm:\r\n"
-                   "radio: %ld, sensor: %ld, tof, %ld, gps: %ld\r\n"
-                   "sd: %ld, adc: %ld, ctrl: %ld, msg: %ld\r\n"
-                   "min rm: %ld, cur rm: %ld\r\n"
-                   "pass tick: %ld\r\n"
-                   "%s",
-			             att.roll, att.pitch, att.yaw,
-                   att.roll_target, att.pitch_target, att.yaw_target,
-             		   pos.height, sensor.distance, bat.voltage, bat.current,
-                   throttle, motor[0], motor[1], motor[2], motor[3],
-                   ctrl_param.P, ctrl_param.I, ctrl_param.D, ack_pl.event,
-                   radio_wm, sensor_wm, tof_wm, gps_wm,
-                   sd_wm, adc_wm, ctrl_wm, msg_wm,
-                   min_remaining, remaining, pass_tick,
-                   gps_buffer[gps_idle_buf_id]);
-    CDC_Transmit_FS((uint8_t *)msg, len);
+		size = snprintf(msg, 512, "r: %.3f, p: %.3f, y: %.3f, "
+                    "rsp: %.3f, psp: %.3f, ysp: %.3f\r\n"
+                    "h: %.2f, d: %d, V: %.2f, I: %.2F\r\n"
+                    "throttle: %d, m0: %d, m1: %d, m2: %d, m3: %d\r\n"
+                    "P: %.2f, I: %.2f, D: %.2f, crash: %d\r\n"
+                    "stack wm:\r\n"
+                    "radio: %ld, sensor: %ld, tof: %ld, gps: %ld\r\n"
+                    "sd: %ld, adc: %ld, ctrl: %ld, msg: %ld\r\n"
+                    "min rm: %ld, cur rm: %ld, rec status: %d\r\n"
+                    "pass tick: %ld\r\n"
+                    "%s",
+			              att.roll, att.pitch, att.yaw,
+                    att.roll_target, att.pitch_target, att.yaw_target,
+             		    pos.height, sensor.distance, bat.voltage, bat.current,
+                    throttle, motor[0], motor[1], motor[2], motor[3],
+                    ctrl_param.P, ctrl_param.I, ctrl_param.D, ack_pl.event,
+                    radio_wm, sensor_wm, tof_wm, gps_wm,
+                    sd_wm, adc_wm, ctrl_wm, msg_wm,
+                    min_remaining, remaining, watch_rec_status, pass_tick,
+                    gps_buffer[gps_idle_buf_id]);
+    CDC_Transmit_FS((uint8_t *)msg, size);
     vTaskDelay(pdMS_TO_TICKS(200));
 	}
 }

@@ -205,10 +205,14 @@ DSTATUS disk_initialize(BYTE drv)
         set_spi_low_clk();       /* 100 - 400 kHz in ID mode */
         memset(DO_H, 0xFF, 512);
         /* Hold CS/MOSI at least 74 cycles */
+        i = 10;
         cs_high();
-        sd_spi_tx(DO_H, 10);
+        do {
+                sd_spi_rx(resp, 1);
+        } while (--i);
         cs_low();
-        i = 10; /* Try to reset SD card 10 times */
+        /* Try to reset SD card 10 times */
+        i = 10;
         while ((send_cmd(CMD0, 0) != 0x01) && --i)
                 ;
         if (!i)
