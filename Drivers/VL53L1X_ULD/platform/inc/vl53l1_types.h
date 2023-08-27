@@ -1,5 +1,5 @@
 /*******************************************************************************
-Copyright © 2015, STMicroelectronics International N.V.
+Copyright (C) 2015, STMicroelectronics International N.V.
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -26,17 +26,17 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ********************************************************************************/
 /**
- * @file  vl53l0x_types.h
- * @brief VL53L0X types definition
+ * @file  vl53l1_types.h
+ * @brief VL53L1 types definition
  */
 
-#ifndef VL53L0X_TYPES_H_
-#define VL53L0X_TYPES_H_
+#ifndef _VL53L1_TYPES_H_
+#define _VL53L1_TYPES_H_
 
 /** @defgroup porting_type  Basic type definition
- *  @ingroup  VL53L0X_platform_group
+ *  @ingroup  api_platform
  *
- *  @brief  file vl53l0x_types.h files hold basic type definition that may requires porting
+ *  @brief  file vl53l1_types.h files hold basic type definition that may requires porting
  *
  *  contains type that must be defined for the platform\n
  *  when target platform and compiler provide stdint.h and stddef.h it is enough to include it.\n
@@ -45,13 +45,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #ifndef NULL
 #error "Error NULL definition should be done. Please add required include "
 #endif
 
 
-#if ! defined(STDINT_H) &&  !defined(_GCC_STDINT_H) &&!defined(__STDINT_DECLS) && !defined(_GCC_WRAP_STDINT_H)
+#if !defined(STDINT_H) && !defined(_STDINT_H) && !defined(_GCC_STDINT_H) && !defined(__STDINT_DECLS) && !defined(_GCC_WRAP_STDINT_H)  && !defined(_STDINT)
 
  #pragma message("Please review  type definition of STDINT define for your platform and add to list above ")
 
@@ -61,7 +64,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
   *  all type and delete these pragma
   */
 
-/** \ingroup VL53L0X_portingType_group
+/** \ingroup VL53L1_portingType_group
  * @{
  */
 
@@ -108,4 +111,4 @@ typedef signed char int8_t;
  * Given a floating point value f it's .16 bit point is (int)(f*(1<<16))*/
 typedef uint32_t FixPoint1616_t;
 
-#endif /* VL53L0X_TYPES_H_ */
+#endif /* VL53L1_TYPES_H_ */

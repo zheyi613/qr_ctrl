@@ -93,12 +93,11 @@ SEGGER/Rec/segger_uart_dma.c \
 Core/Src/rtos_bus.c \
 Core/Src/icm20948.c \
 Core/Src/ak09916.c \
-Core/Src/ahrs.c \
-$(wildcard Drivers/VL53L0X_1.0.4/Api/core/src/*.c) \
-$(wildcard Drivers/VL53L0X_1.0.4/Api/platform/src/*.c) \
-Core/Src/vl53l0x.c \
+$(wildcard Drivers/VL53L1X_ULD/core/src/*.c) \
+$(wildcard Drivers/VL53L1X_ULD/platform/src/*.c) \
 Core/Src/lps22hb.c \
 Core/Src/nrf24l01p.c \
+Core/Src/ahrs.c \
 Core/Src/attitude_control.c \
 $(wildcard Drivers/FatFs/Src/*.c) \
 Core/Src/sd_spi.c
@@ -174,8 +173,8 @@ C_INCLUDES =  \
 -ISEGGER/Config \
 -ISEGGER/OS \
 -ISEGGER/SEGGER \
--IDrivers/VL53L0X_1.0.4/Api/core/inc \
--IDrivers/VL53L0X_1.0.4/Api/platform/inc \
+-IDrivers/VL53L1X_ULD/core/inc \
+-IDrivers/VL53L1X_ULD/platform/inc \
 -IDrivers/FatFs/Inc
 
 # compile gcc flags
