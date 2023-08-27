@@ -20,6 +20,10 @@ enum bus_mode {
 #define I2C_REG_16BIT   I2C_MEMADD_SIZE_16BIT
 
 void set_bus_mode(enum bus_mode mode);
+int i2c_write_multi_dma(I2C_HandleTypeDef *hi2c, uint8_t address, uint16_t reg,
+                        uint16_t reg_size, uint8_t *data, uint16_t size);
+int i2c_read_multi_dma(I2C_HandleTypeDef *hi2c, uint8_t address, uint16_t reg,
+                       uint16_t reg_size, uint8_t *data, uint16_t size);
 int i2c_write_multi(I2C_HandleTypeDef *hi2c, uint8_t address, uint16_t reg,
                     uint16_t reg_size, uint8_t *data, uint16_t size);
 int i2c_read_multi(I2C_HandleTypeDef *hi2c, uint8_t address, uint16_t reg,

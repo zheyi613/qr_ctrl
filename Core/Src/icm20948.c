@@ -9,12 +9,12 @@
 #include "rtos_bus.h"
 #include "stm32f4xx_hal.h"
 
-#define read_reg_multi(reg, pData, size)                                \
-        i2c_read_multi(&hi2c2, ICM20948_ADDR << 1, reg, I2C_REG_8BIT,   \
-                       pData, size)
-#define write_reg_multi(reg, pData, size)                               \
-        i2c_write_multi(&hi2c2, ICM20948_ADDR << 1, reg, I2C_REG_8BIT,  \
-                        pData, size)
+#define read_reg_multi(reg, pData, size)                                  \
+        i2c_read_multi_dma(&hi2c2, ICM20948_ADDR << 1, reg, I2C_REG_8BIT, \
+                           pData, size)
+#define write_reg_multi(reg, pData, size)                                 \
+        i2c_write_multi_dma(&hi2c2, ICM20948_ADDR << 1, reg, I2C_REG_8BIT,\
+                            pData, size)
 #define delay_ms(t)     HAL_Delay(t)
 
 /* static variable */
