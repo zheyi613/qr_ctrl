@@ -158,7 +158,7 @@ VL53L1_Error VL53L1_RdByte(uint16_t Dev, uint16_t index, uint8_t *data) {
     VL53L1_Error Status = VL53L1_ERROR_NONE;
 
     VL53L1_GetI2cBus();
-    if (_I2CRead(Dev, index, &data, 1)) {
+    if (_I2CRead(Dev, index, data, 1)) {
         Status = VL53L1_ERROR_CONTROL_INTERFACE;
     }
     VL53L1_PutI2cBus();
