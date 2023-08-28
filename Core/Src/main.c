@@ -60,7 +60,7 @@
 #define SENSOR_TASK
 // #define TOF_TASK
 #define GPS_TASK
-// #define SD_TASK
+#define SD_TASK
 #define ADC_TASK
 #define CTRL_TASK
 #define MSG_TASK
@@ -309,6 +309,8 @@ int main(void)
   MX_USART2_UART_Init();
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
+  HAL_TIM_Base_Start_IT(&htim9);
+
   /* initialize global variable */
   memset(&sensor, 0, sizeof(struct sensor_data));
   memset(&att, 0, sizeof(struct attitude));
@@ -452,7 +454,7 @@ int main(void)
   configASSERT(status == pdPASS);
 #endif
 #ifdef ADC_TASK
-	status = xTaskCreate(adc_task, "adc_task", 200, NULL, 4, &adc_handler);
+	status = xTaskCreate(adc_task, "adc_task", 200, NULL, 3, &adc_handler);
 	configASSERT(status == pdPASS);
 #endif
 #ifdef CTRL_TASK
@@ -678,9 +680,9 @@ void rec_data(void *data)
       size = sizeof(struct rec_ctrl);
       break;
     }
-    portENTER_CRITICAL();
+    vTaskSuspendAll();
     write_size = xStreamBufferSend(sd_buf_handler, data, size, 0);
-    portEXIT_CRITICAL();
+    xTaskResumeAll();
     if (write_size < size) {
       rec_status &= ~REC_STATUS_PROCESS_MASK;
       rec_status |= REC_STATUS_WRITE_BUFFER_ERROR |
