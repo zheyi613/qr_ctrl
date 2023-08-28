@@ -58,9 +58,9 @@
 /* Configure tasks to enable */
 #define RADIO_TASK
 #define SENSOR_TASK
-#define TOF_TASK
+// #define TOF_TASK
 #define GPS_TASK
-#define SD_TASK
+// #define SD_TASK
 #define ADC_TASK
 #define CTRL_TASK
 #define MSG_TASK
@@ -683,7 +683,7 @@ void rec_data(void *data)
     portEXIT_CRITICAL();
     if (write_size < size) {
       rec_status &= ~REC_STATUS_PROCESS_MASK;
-      rec_status |= REC_STATUS_WRITE_BUFFER_MISSING |
+      rec_status |= REC_STATUS_WRITE_BUFFER_ERROR |
                     REC_STATUS_PROCESS_END;
     }
   }

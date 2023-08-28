@@ -1,7 +1,7 @@
 /**
  * @file sd_record.h
  * @author zheyi613 (zheyi880613@gmail.com)
- * @brief definition of sd card recording event
+ * @brief definition of sd recording status and data structure
  * @date 2023-08-26
  */
 #ifndef SD_RECORD_H
@@ -15,9 +15,13 @@
 #define REC_STATUS_PROCESS_END              (2U << 0)
 #define REC_STATUS_PROCESS_IDLE             (3U << 0)
 
+/* Low layer error in diskio */
 #define REC_STATUS_FILESYSTEM_ERROR         (1U << 2)
+/* Not enough memory to allocate buffer */
 #define REC_STATUS_BUFFER_CREATE_ERROR      (1U << 3)
-#define REC_STATUS_WRITE_BUFFER_MISSING     (1U << 4)
+/* Data size not match when writing to buffer */
+#define REC_STATUS_WRITE_BUFFER_ERROR       (1U << 4)
+/* Data size not match when writing to SD card */
 #define REC_STATUS_WRITE_SD_ERROR           (1U << 5)
 
 
