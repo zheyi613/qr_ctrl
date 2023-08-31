@@ -1034,18 +1034,15 @@ static void ctrl_task(void *param)
 
 static void msg_task(void *param)
 {
-  TickType_t current_tick, last_tick = 0, pass_tick = 0;
   BaseType_t radio_wm = 0, sensor_wm = 0, tof_wm = 0, gps_wm = 0;
   BaseType_t sd_wm = 0, adc_wm = 0, ctrl_wm = 0, msg_wm = 0;
   BaseType_t min_remaining, remaining;
   char msg[512];
   uint16_t size;
   uint8_t watch_rec_status;
+  TickType_t cur_tick;
 
 	while (1) {
-    current_tick = xTaskGetTickCount();
-    pass_tick = current_tick - last_tick;
-    last_tick = current_tick;
     /* encode ack payload */
     vTaskSuspendAll();
     ack_pl.throttle = ENCODE_PAYLOAD_THROTTLE(throttle);
@@ -1059,6 +1056,7 @@ static void msg_task(void *param)
     ack_pl.height = ENCODE_PAYLOAD_HEIGHT(pos.height);
     ack_pl.voltage = ENCODE_PAYLOAD_VOLTAGE(bat.voltage);
     watch_rec_status = rec_status;
+    cur_tick = current_tick;
     xTaskResumeAll();
 
     radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
@@ -1082,7 +1080,7 @@ static void msg_task(void *param)
                     "radio: %ld, sensor: %ld, tof: %ld, gps: %ld\r\n"
                     "sd: %ld, adc: %ld, ctrl: %ld, msg: %ld\r\n"
                     "min rm: %ld, cur rm: %ld, rec status: %d\r\n"
-                    "pass tick: %ld\r\n"
+                    "current tick: %ld\r\n"
                     "%s",
 			              att.roll, att.pitch, att.yaw,
                     att.roll_target, att.pitch_target, att.yaw_target,
@@ -1091,7 +1089,7 @@ static void msg_task(void *param)
                     ctrl_param.P, ctrl_param.I, ctrl_param.D, ack_pl.event,
                     radio_wm, sensor_wm, tof_wm, gps_wm,
                     sd_wm, adc_wm, ctrl_wm, msg_wm,
-                    min_remaining, remaining, watch_rec_status, pass_tick,
+                    min_remaining, remaining, watch_rec_status, cur_tick,
                     gps_buffer[gps_idle_buf_id]);
     CDC_Transmit_FS((uint8_t *)msg, size);
     vTaskDelay(pdMS_TO_TICKS(200));

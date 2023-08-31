@@ -147,11 +147,15 @@ int lps22hb_read_bypass(float *press, float *temp)
 
 int lps22hb_read_stream(float *press, float *temp)
 {
-	const int cnt = lps22hb_get_fifo_cnt();
+	int cnt = lps22hb_get_fifo_cnt();
 	if (cnt < 1)
 		return 1;
+#ifdef LPS22HB_READ_MAX_FIFO_SIZE
+	else if (cnt > LPS22HB_READ_MAX_FIFO_SIZE)
+		cnt = LPS22HB_READ_MAX_FIFO_SIZE;
+#endif
 	int result;
-	lps22hb_data_t get_data[cnt];
+	lps22hb_data_t get_data[(const int)cnt];
 	uint32_t intpress = 0;
 	float press_total = 0;
 	float temp_total = 0;
