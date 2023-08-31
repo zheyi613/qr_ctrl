@@ -60,7 +60,7 @@
 #define SENSOR_TASK
 // #define TOF_TASK
 #define GPS_TASK
-// #define SD_TASK
+#define SD_TASK
 #define ADC_TASK
 #define CTRL_TASK
 #define MSG_TASK
