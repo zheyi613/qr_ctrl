@@ -84,7 +84,7 @@ void USART_DMA_init(uint32_t baudrate, char *tx_buf, char *rx_buf)
                 | DMA_CHANNEL_4
                 | DMA_MBURST_SINGLE   /* Memory burst single */
                 | DMA_PBURST_SINGLE   /* Peripheral burst single */
-                | DMA_PRIORITY_HIGH
+                | DMA_PRIORITY_VERY_HIGH
                 | 0                   /* Peripheral increment by PSIZE */
                 | DMA_MDATAALIGN_BYTE /* Mememory data size */
                 | DMA_PDATAALIGN_BYTE /* Peripheral data size */
@@ -96,8 +96,8 @@ void USART_DMA_init(uint32_t baudrate, char *tx_buf, char *rx_buf)
                 | DMA_SxCR_TCIE;      /* Transfer complete interrupt enable */
 
         /* Setup callbacks which are called by ISR handler and enable
-         * interrupt in NVIC (priority: 8) */
-        NVIC_SetPriority(DMA2_Stream7_IRQn, 8);
+         * interrupt in NVIC (priority: 6) */
+        NVIC_SetPriority(DMA2_Stream7_IRQn, 6);
         NVIC_EnableIRQ(DMA2_Stream7_IRQn);
 
         /*   Initialize RX DMA (Stream 5, CH4)   */
@@ -120,7 +120,7 @@ void USART_DMA_init(uint32_t baudrate, char *tx_buf, char *rx_buf)
                 | DMA_CHANNEL_4
                 | DMA_MBURST_SINGLE   /* Memory burst single */
                 | DMA_PBURST_SINGLE   /* Peripheral burst single */
-                | DMA_PRIORITY_HIGH
+                | DMA_PRIORITY_VERY_HIGH
                 | 0                   /* Peripheral increment by PSIZE */
                 | DMA_MDATAALIGN_BYTE /* Mememory data size */
                 | DMA_PDATAALIGN_BYTE /* Peripheral data size */
@@ -132,8 +132,8 @@ void USART_DMA_init(uint32_t baudrate, char *tx_buf, char *rx_buf)
                 | DMA_SxCR_TCIE;      /* Transfer complete interrupt enable */
 
         /* Setup callbacks which are called by ISR handler and enable
-         * interrupt in NVIC (priority: 8) */
-        NVIC_SetPriority(DMA2_Stream5_IRQn, 8);
+         * interrupt in NVIC (priority: 6) */
+        NVIC_SetPriority(DMA2_Stream5_IRQn, 6);
         NVIC_EnableIRQ(DMA2_Stream5_IRQn);
 
         /* Configure USART RX/TX pins for alternate function (AF7) */
@@ -173,8 +173,8 @@ void USART_DMA_init(uint32_t baudrate, char *tx_buf, char *rx_buf)
         USART_REG->CR2 = 0;     /* STOP bits: 1 Stop bit */
 
         /* Setup callbacks which are called by ISR handler and enable
-         * interrupt in NVIC (priority: 8) */
-        NVIC_SetPriority(USART1_IRQn, 8);
+         * interrupt in NVIC (priority: 6) */
+        NVIC_SetPriority(USART1_IRQn, 6);
         NVIC_EnableIRQ(USART1_IRQn);
         
         /* Set baudrate */
@@ -275,6 +275,6 @@ void USART1_IRQHandler(void)
         /* Read USART SR to clear TC */
         USART_REG->SR;
         /* Enable DMA */
-        DMA2_Stream7->CR |= DMA_SxCR_EN;     
+        DMA2_Stream7->CR |= DMA_SxCR_EN;
 }
 #endif
