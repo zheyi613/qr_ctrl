@@ -98,10 +98,10 @@ enum {
 #define DEG2RAD             0.017453292F
 
 /* GPS buffer size */
-#define GPS_BUFFER_SIZE     256
+#define GPS_BUFFER_SIZE     128
 
 /* SD card recording buffer size */
-#define SD_BUFFER_SIZE      1024
+#define SD_BUFFER_SIZE      2048
 #define SD_BUFFER_LEVEL     512
 
 /* SD recording mode configuration */
@@ -117,6 +117,15 @@ enum {
 #define REC_BATTERY
 #define REC_CTRL
 
+/* GPS header and address ID of NAV_SOL */
+#define GPS_HEADER_1        0xB5 /* Sync char 1 */
+#define GPS_HEADER_2        0x62 /* Sync char 2 */
+#define GPS_NAV             0x01 /* Class */
+#define GPS_NAV_SOL         0x06 /* ID */
+/* GPS get symbol status */
+#define GPS_RECEIVE_SYNC_1    0
+#define GPS_RECEIVE_SYNC_2    1
+#define GPS_RECEIVE_DATA      2
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -206,10 +215,33 @@ WORD Timer1, Timer2;
   uint8_t rec_status = REC_STATUS_PROCESS_IDLE;
 #endif
 /* GPS buffer (transfer by double buffer) */
-char gps_buffer[2][GPS_BUFFER_SIZE];
-char *gps_rx_buf_ptr;
-uint8_t gps_idle_buf_id;
-
+uint8_t gps_buffer[2][GPS_BUFFER_SIZE];
+uint8_t gps_rx_buf_id;
+uint8_t *gps_rx_ptr;
+uint16_t gps_rx_cnt;
+uint8_t gps_receive_status;
+uint8_t gps_data_status;
+uint16_t gps_data_length;
+struct gps_nav_sol {
+  uint32_t iTOW;
+  int32_t fTOW;
+  int16_t week;
+  uint8_t gpsFix;
+  int8_t flags;
+  int32_t ecefX;
+  int32_t ecefY;
+  int32_t ecefZ;
+  uint32_t pAcc;
+  int32_t ecefVX;
+  int32_t ecefVY;
+  int32_t ecefVZ;
+  uint32_t sAcc;
+  uint16_t pDOP;
+  uint8_t reserved1;
+  uint8_t numSV;
+  uint32_t reserved2;
+};
+struct gps_nav_sol *gps_nav_sol_data;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -434,7 +466,7 @@ int main(void)
 	SEGGER_UART_init(1500000);
 	SEGGER_SYSVIEW_Conf();
 #ifdef RADIO_TASK
-  status = xTaskCreate(radio_task, "radio_task", 200, NULL, 6, &radio_handler);
+  status = xTaskCreate(radio_task, "radio_task", 200, NULL, 4, &radio_handler);
 	configASSERT(status == pdPASS);
 #endif
 #ifdef SENSOR_TASK
@@ -450,7 +482,7 @@ int main(void)
   configASSERT(status == pdPASS);
 #endif
 #ifdef SD_TASK
-  status = xTaskCreate(sd_task, "sd_task", 700, NULL, 3, &sd_handler);
+  status = xTaskCreate(sd_task, "sd_task", 600, NULL, 3, &sd_handler);
   configASSERT(status == pdPASS);
 #endif
 #ifdef ADC_TASK
@@ -531,7 +563,6 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
   if (GPIO_Pin == NRF_IRQ_Pin) {
-    nrf24l01p_rxtx((uint8_t *)&pl, (uint8_t *)&ack_pl, ACK_PAYLOAD_WIDTH);
     vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
   }
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
@@ -567,6 +598,8 @@ void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
 
   if (hspi->Instance == hspi1.Instance) {
     vTaskNotifyGiveFromISR(sd_handler, &xHigherPriorityTaskWoken);
+  } else if (hspi->Instance == hspi2.Instance) {
+    vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
   }
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
@@ -577,6 +610,18 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 
   if (hspi->Instance == hspi1.Instance) {
     vTaskNotifyGiveFromISR(sd_handler, &xHigherPriorityTaskWoken);
+  } else if (hspi->Instance == hspi2.Instance) {
+    vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
+  }
+  portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
+{
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+  if (hspi->Instance == hspi2.Instance) {
+      vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
   }
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
@@ -595,19 +640,37 @@ void USART2_IRQHandler(void)
   traceISR_ENTER();
 
   if (USART2->SR & USART_SR_RXNE) {
-    *gps_rx_buf_ptr = (uint8_t)USART2->DR;
+    *gps_rx_ptr = (uint8_t)USART2->DR;
 
-    if (*gps_rx_buf_ptr == '\n') {
-      BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    if (gps_receive_status == GPS_RECEIVE_DATA) {
+      gps_rx_cnt++;
+      gps_rx_ptr++;
 
-      gps_idle_buf_id = !gps_idle_buf_id;
-      gps_rx_buf_ptr = gps_buffer[!gps_idle_buf_id];
+      if (gps_rx_cnt < 4) {
+        /* Do nothing */
+      } else if (gps_rx_cnt == 4) { /* Get data length */
+        gps_data_length = *(gps_rx_ptr - 2);
+        gps_data_length |= (uint16_t)(*(gps_rx_ptr - 1)) << 8;
+      } else if (gps_rx_cnt == gps_data_length + 6) {
+        /* Call GPS task after get CK_B */    
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        /* Swich to another gps buffer */
+        gps_rx_buf_id = !gps_rx_buf_id;
+        gps_rx_ptr = gps_buffer[gps_rx_buf_id];
+        /* Initialize index and status */
+        gps_rx_cnt = 0;
+        gps_receive_status = GPS_RECEIVE_SYNC_1;
 
-      vTaskNotifyGiveFromISR(gps_handler, &xHigherPriorityTaskWoken);
+        vTaskNotifyGiveFromISR(gps_handler, &xHigherPriorityTaskWoken);
 
-      portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-    } else {
-      gps_rx_buf_ptr++;
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+      }
+    } else if (gps_receive_status == GPS_RECEIVE_SYNC_1) {
+      if (*gps_rx_ptr == GPS_HEADER_1)
+        gps_receive_status = GPS_RECEIVE_SYNC_2;
+    } else if (gps_receive_status == GPS_RECEIVE_SYNC_2) {
+      gps_receive_status = (*gps_rx_ptr == GPS_HEADER_2) ?
+                           GPS_RECEIVE_DATA : GPS_RECEIVE_SYNC_1;
     }
   }
   traceISR_EXIT();
@@ -624,6 +687,9 @@ static void radio_task(void *param)
       start_flag = 0;
     }
     ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
+    vTaskDelay(pdMS_TO_TICKS(2));
+    nrf24l01p_receive((uint8_t *)&pl);
+    nrf24l01p_write_ack_payload((uint8_t *)&ack_pl, ACK_PAYLOAD_WIDTH);
     /* decode payload */
     if (pl.throttle < MAX_THROTTLE && pl.throttle >= 0)
       throttle = DECODE_PAYLOAD_THROTTLE(pl.throttle);
@@ -680,9 +746,7 @@ void rec_data(void *data)
       size = sizeof(struct rec_ctrl);
       break;
     }
-    vTaskSuspendAll();
     write_size = xStreamBufferSend(sd_buf_handler, data, size, 0);
-    xTaskResumeAll();
     if (write_size < size) {
       rec_status &= ~REC_STATUS_PROCESS_MASK;
       rec_status |= REC_STATUS_WRITE_BUFFER_ERROR |
@@ -813,16 +877,35 @@ static void tof_task(void *param)
 
 static void gps_task(void *param)
 {
+  uint8_t *idle_buf_ptr;
+  uint8_t CK_A, CK_B;
+  uint16_t i, length;
   uint8_t start_flag = 1;
 
   while (1) {
     if (start_flag) {
-      gps_idle_buf_id = 0;
-      gps_rx_buf_ptr = gps_buffer[!gps_idle_buf_id];
+      gps_rx_buf_id = 0;
+      gps_rx_ptr = gps_buffer[gps_rx_buf_id];
+      gps_rx_cnt = 0;
+      gps_receive_status = GPS_RECEIVE_SYNC_1;
       __HAL_UART_ENABLE_IT(&huart2, UART_IT_RXNE);
       start_flag = 0;
     }
     ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
+    idle_buf_ptr = gps_buffer[!gps_rx_buf_id];
+    gps_nav_sol_data = (struct gps_nav_sol *)(idle_buf_ptr + 4);
+    length = *(idle_buf_ptr + 2) | ((uint16_t)(*(idle_buf_ptr + 3)) << 8);
+    CK_A = 0;
+    CK_B = 0;
+    /* Calculate GPS checksum */
+    for (i = 0; i < (length + 4); i++) {
+      CK_A += *idle_buf_ptr++;
+      CK_B += CK_A;
+    }
+    if ((*idle_buf_ptr == CK_A) && (*(idle_buf_ptr + 1) == CK_B))
+      gps_data_status = 1;
+    else
+      gps_data_status = 0;
   }
 }
 
@@ -1081,7 +1164,7 @@ static void msg_task(void *param)
                     "sd: %ld, adc: %ld, ctrl: %ld, msg: %ld\r\n"
                     "min rm: %ld, cur rm: %ld, rec status: %d\r\n"
                     "current tick: %ld\r\n"
-                    "%s",
+                    "gps week time: %ld, cksum: %d\r\n",
 			              att.roll, att.pitch, att.yaw,
                     att.roll_target, att.pitch_target, att.yaw_target,
              		    pos.height, sensor.distance, bat.voltage, bat.current,
@@ -1090,7 +1173,7 @@ static void msg_task(void *param)
                     radio_wm, sensor_wm, tof_wm, gps_wm,
                     sd_wm, adc_wm, ctrl_wm, msg_wm,
                     min_remaining, remaining, watch_rec_status, cur_tick,
-                    gps_buffer[gps_idle_buf_id]);
+                    gps_nav_sol_data->iTOW, gps_data_status);
     CDC_Transmit_FS((uint8_t *)msg, size);
     vTaskDelay(pdMS_TO_TICKS(200));
 	}
