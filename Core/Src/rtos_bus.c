@@ -8,7 +8,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-#define MAX_SPI_POLLING_DATA_SIZE       64
+#define MAX_SPI_POLLING_DATA_SIZE       16
 
 uint8_t bus_int_mode;
 
