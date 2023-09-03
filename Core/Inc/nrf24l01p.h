@@ -62,7 +62,7 @@ void nrf24l01p_receive(uint8_t *payload);
 #ifdef NRF24L01P_ACK_PAYLOAD
 void nrf24l01p_transmit(uint8_t *payload, uint8_t width);
 int nrf24l01p_tx_irq(uint8_t *payload);
-void nrf24l01p_rxtx(uint8_t *rx_payload, uint8_t *tx_payload, uint8_t tx_width);
+void nrf24l01p_write_ack_payload(uint8_t *payload, uint8_t width);
 #else
 void nrf24l01p_transmit(uint8_t *payload);
 int nrf24l01p_tx_irq(void);

@@ -8,15 +8,15 @@
 #include "nrf24l01p.h"
 #include "dwt_delay.h"
 #include "gpio.h"
-#include "spi.h"
+#include "rtos_bus.h"
 
 /* Define user spi function */
-#define nrf_spi_txrx(pTxData,pRxData)      \
-        HAL_SPI_TransmitReceive(&hspi2, pTxData, pRxData, 1, 1)
-#define nrf_spi_rx(pData, size)   \
-        HAL_SPI_Receive(&hspi2, pData, size, 1)
-#define nrf_spi_tx(pData, size)   \
-        HAL_SPI_Transmit(&hspi2, pData, size, 1)
+#define nrf_spi_txrx(pTxData,pRxData)   \
+        spi_txrx(&hspi2, pTxData, pRxData, 1)
+#define nrf_spi_rx(pData, size)         \
+        spi_rx(&hspi2, pData, size)
+#define nrf_spi_tx(pData, size)         \
+        spi_tx(&hspi2, pData, size)
 #define cs_high()       \
         HAL_GPIO_WritePin(NRF_CS_GPIO_Port, NRF_CS_Pin, GPIO_PIN_SET)
 #define cs_low()        \
@@ -68,7 +68,7 @@
 #define NRF24L01P_REG_DYNPD             0x1C
 #define NRF24L01P_REG_FEATURE           0x1D
 
-/* Timing information */
+/* Timing information us */
 #define NRF24L01P_T_PD2STBY_IN          1500
 #define NRF24L01P_T_PD2STBY_EX          150
 #define NRF24L01P_T_STBY2A              130
@@ -78,16 +78,52 @@
 /* Static variable */
 static uint8_t address_width = 5;
 
-static void read_reg_multi(uint8_t reg, uint8_t *data, uint8_t size)
+static uint8_t send_cmd_only(uint8_t command)
 {
-        uint8_t command = NRF24L01P_CMD_R_REGISTER | reg;
+        uint8_t status;
+
+        cs_low();
+        nrf_spi_txrx(&command, &status);
+        cs_high();
+
+        return status;
+}
+
+#define get_status()            \
+        send_cmd_only(NRF24L01P_CMD_NOP)
+
+#define flush_rx_fifo()         \
+        send_cmd_only(NRF24L01P_CMD_FLUSH_RX)
+
+#define flush_tx_fifo()         \
+        send_cmd_only(NRF24L01P_CMD_FLUSH_TX)
+
+static uint8_t read_multi(uint8_t command, uint8_t *data, uint8_t size)
+{
         uint8_t status;
 
         cs_low();
         nrf_spi_txrx(&command, &status);
         nrf_spi_rx(data, size);
         cs_high();
+
+        return status;
 }
+
+static uint8_t write_multi(uint8_t command, uint8_t *data, uint8_t size)
+{
+        uint8_t status;
+
+        cs_low();
+        nrf_spi_txrx(&command, &status);
+        nrf_spi_tx(data, size);
+        cs_high();
+
+        return status;
+}
+
+#define read_reg_multi(reg, data, size)        \
+        read_multi(NRF24L01P_CMD_R_REGISTER | (reg), data, size)
 
 static inline uint8_t read_reg(uint8_t reg)
 {
@@ -97,104 +133,22 @@ static inline uint8_t read_reg(uint8_t reg)
         return val;
 }
 
-static void write_reg_multi(uint8_t reg, uint8_t *data, uint8_t size)
-{
-        uint8_t command = NRF24L01P_CMD_W_REGISTER | reg;
-        uint8_t status;
-
-        cs_low();
-        nrf_spi_txrx(&command, &status);
-        nrf_spi_tx(data, size);
-        cs_high();
-}
+#define write_reg_multi(reg, data, size)       \
+        write_multi(NRF24L01P_CMD_W_REGISTER | (reg), data, size)
 
 static inline void write_reg(uint8_t reg, uint8_t val)
 {
         write_reg_multi(reg, &val, 1);
 }
 
+#define get_rx_payload_width(p_width)                  \
+        read_multi(NRF24L01P_CMD_R_RX_PL_WID, p_width, 1)
 
+#define read_rx_payload(payload, width)         \
+        read_multi(NRF24L01P_CMD_R_RX_PAYLOAD, payload, width)
 
-static void read_rx_payload(uint8_t *payload, uint8_t width)
-{
-        uint8_t command = NRF24L01P_CMD_R_RX_PAYLOAD;
-        uint8_t status;
-
-        cs_low();
-        nrf_spi_txrx(&command, &status);
-        nrf_spi_rx(payload, width);
-        cs_high();
-}
-
-static void write_tx_payload(uint8_t *payload, uint8_t width)
-{
-        uint8_t command = NRF24L01P_CMD_W_TX_PAYLOAD;
-        uint8_t status;
-
-        cs_low();
-        nrf_spi_txrx(&command, &status);
-        nrf_spi_tx(payload, width);
-        cs_high();
-}
-
-static void flush_rx_fifo(void)
-{
-        uint8_t command = NRF24L01P_CMD_FLUSH_RX;
-        uint8_t status;
-
-        cs_low();
-        nrf_spi_txrx(&command, &status);
-        cs_high();
-}
-
-static void flush_tx_fifo(void)
-{
-        uint8_t command = NRF24L01P_CMD_FLUSH_TX;
-        uint8_t status;
-
-        cs_low();
-        nrf_spi_txrx(&command, &status);
-        cs_high();
-}
-
-#ifdef NRF24L01P_ACK_PAYLOAD
-static uint8_t get_rx_payload_width(void)
-{
-        uint8_t command = NRF24L01P_CMD_R_RX_PL_WID;
-        uint8_t status;
-        uint8_t width;
-
-        cs_low();
-        nrf_spi_txrx(&command, &status);
-        nrf_spi_rx(&width, 1);
-        cs_high();
-
-        return width;
-}
-
-static void write_ack_payload(uint8_t *payload, uint8_t width)
-{
-        uint8_t command = NRF24L01P_CMD_W_ACK_PAYLOAD;
-        uint8_t status;
-
-        cs_low();
-        nrf_spi_txrx(&command, &status);
-        nrf_spi_tx(payload, width);
-        cs_high();
-}
-#endif
-
-static uint8_t get_status(void)
-{
-        uint8_t command = NRF24L01P_CMD_NOP;
-        uint8_t status;
-
-        cs_low();
-        nrf_spi_txrx(&command, &status);
-        cs_high();
-
-        return status;
-}
+#define write_tx_payload(payload, width)        \
+        write_multi(NRF24L01P_CMD_W_TX_PAYLOAD, payload, width)
 
 static inline void power_up(void)
 {
@@ -206,7 +160,7 @@ static inline void power_up(void)
         delay_us(NRF24L01P_T_PD2STBY_IN);
 }
 
-static int set_tx_address(uint8_t *address)
+int set_tx_address(uint8_t *address)
 {
         uint8_t check_address[5];
         uint8_t i;
@@ -272,7 +226,6 @@ static int soft_reset(void)
         write_reg(NRF24L01P_REG_RF_SETUP, 0x0E);
         write_reg(NRF24L01P_REG_STATUS, 0x70);
         write_reg(NRF24L01P_REG_RX_PW_P0, 0x00);
-        write_reg(NRF24L01P_REG_RX_PW_P0, 0x00);
         write_reg(NRF24L01P_REG_RX_PW_P1, 0x00);
         write_reg(NRF24L01P_REG_RX_PW_P2, 0x00);
         write_reg(NRF24L01P_REG_RX_PW_P3, 0x00);
@@ -326,32 +279,42 @@ int nrf24l01p_init(struct nrf24l01p_cfg *param)
 #else
         write_reg(NRF24L01P_REG_RX_PW_P0, NRF24L01P_PAYLOAD_WIDTH);
 #endif
-        // if (param->mode == PRX_MODE)
-        //         ce_high();
-
         return 0;
 }
 
+/**
+ * @brief Go RX mode and Start receiving package
+ * Note:  Minimum time within CE high and CSN low: 4 us
+ */
 void nrf24l01p_start_rx(void)
 {
         ce_high();
 }
 
 /**
- * @brief receive one payload in prx mode
+ * @brief receive one payload in prx mode (p59 c,d)
  * 
  * @param payload 
  */
 void nrf24l01p_receive(uint8_t *payload)
 {
+#ifdef NRF24L01P_ACK_PAYLOAD
+        uint8_t width;
+
+        get_rx_payload_width(&width);
+        read_rx_payload(payload, width);
+        /* Clear RX_DR and TX_DS interrupt bit to reset IRQ pin */
+        write_reg(NRF24L01P_REG_STATUS, 0x60);
+#else
         uint8_t status = get_status();
-        /* Clear RX data ready interrupt bit */
-        if (status & 0x40)
-                write_reg(NRF24L01P_REG_STATUS, status);
-        else
+     
+        if (!(status & 0x40))
                 return;
 
         read_rx_payload(payload, NRF24L01P_PAYLOAD_WIDTH);
+        /* Clear RX_DR interrupt bit to reset IRQ pin */
+        write_reg(NRF24L01P_REG_STATUS, 0x40);
+#endif
 }
 
 #ifdef NRF24L01P_ACK_PAYLOAD
@@ -384,42 +347,39 @@ int nrf24l01p_tx_irq(void)
 #endif
 {
         uint8_t status = get_status();
-        /* Clear TX data sent interrupt bit */
+        /* Clear TX_DS and MAX_RT interrupt bit */
         write_reg(NRF24L01P_REG_STATUS, status);
 
         if (!(status & 0x20))
                 return 1;
 
 #ifdef NRF24L01P_ACK_PAYLOAD
-        uint8_t width = get_rx_payload_width();
+        uint8_t width;
+        get_rx_payload_width(&width);
         read_rx_payload(payload, width);
 #endif
         return 0;
 }
 
 #ifdef NRF24L01P_ACK_PAYLOAD
-/**
- * @brief receive payload then transmit ack payload in prx mode
- *        Note that must be define NRF24L01P_ACK_PAYLOAD
- * 
- * @param rx_payload 
- * @param tx_payload
- * @param tx_width
+/* Immediately upload ACK payload before entering TX mode
+ * Note: All the transmission must be completed within 130 us (max: 170us)
+ *       after irq pin active low. Otherwise the module will
+ *       go unexpected state.
  */
-void nrf24l01p_rxtx(uint8_t *rx_payload, uint8_t *tx_payload, uint8_t tx_width)
+
+/**
+ * @brief Write ACK payload to TX FIFO (use in PRX RX mode)
+ * Note:  If ACK payload is uploaded immediately when irq pin is actived low.
+ *        All the SPI transfer must be completed within PLL clock (130 us)
+ *        (max : 170 us). Otherwise the module will go unexpected state
+ *        when SPI transmission is ongoing.
+ * 
+ * @param payload ACK payload pointer
+ * @param width ACK payload width
+ */
+void nrf24l01p_write_ack_payload(uint8_t *payload, uint8_t width)
 {
-        uint8_t status = get_status();
-        uint8_t rx_width;
-
-        if (status & 0x40)
-                write_reg(NRF24L01P_REG_STATUS, status);
-        else
-                return;
-        /* Write payload to TX FIFO before PTX receives ACK (130us) */
-        write_ack_payload(tx_payload, tx_width);
-
-        rx_width = get_rx_payload_width();
-
-        read_rx_payload(rx_payload, rx_width);
+        write_multi(NRF24L01P_CMD_W_ACK_PAYLOAD, payload, width);
 }
 #endif
