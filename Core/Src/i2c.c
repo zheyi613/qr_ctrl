@@ -21,7 +21,6 @@
 #include "i2c.h"
 
 /* USER CODE BEGIN 0 */
-#include "dwt_delay.h"
 /* USER CODE END 0 */
 
 I2C_HandleTypeDef hi2c2;
@@ -191,7 +190,7 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
     __HAL_RCC_I2C3_CLK_ENABLE();
 
     /* I2C3 interrupt Init */
-    HAL_NVIC_SetPriority(I2C3_EV_IRQn, 10, 0);
+    HAL_NVIC_SetPriority(I2C3_EV_IRQn, 8, 0);
     HAL_NVIC_EnableIRQ(I2C3_EV_IRQn);
   /* USER CODE BEGIN I2C3_MspInit 1 */
 
