@@ -746,7 +746,9 @@ void rec_data(void *data)
       size = sizeof(struct rec_ctrl);
       break;
     }
+    vTaskSuspendAll();
     write_size = xStreamBufferSend(sd_buf_handler, data, size, 0);
+    xTaskResumeAll();
     if (write_size < size) {
       rec_status &= ~REC_STATUS_PROCESS_MASK;
       rec_status |= REC_STATUS_WRITE_BUFFER_ERROR |
@@ -886,8 +888,11 @@ static void gps_task(void *param)
     if (start_flag) {
       gps_rx_buf_id = 0;
       gps_rx_ptr = gps_buffer[gps_rx_buf_id];
+      idle_buf_ptr = gps_buffer[!gps_rx_buf_id];
+      gps_nav_sol_data = (struct gps_nav_sol *)(idle_buf_ptr + 4);
       gps_rx_cnt = 0;
       gps_receive_status = GPS_RECEIVE_SYNC_1;
+      gps_data_status = 0;
       __HAL_UART_ENABLE_IT(&huart2, UART_IT_RXNE);
       start_flag = 0;
     }

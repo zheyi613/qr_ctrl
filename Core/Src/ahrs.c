@@ -405,8 +405,8 @@ void ahrs2euler(float *r, float *p, float *y)
 }
 
 void ahrs2quat(float q[4])
-#if defined(ROLL_BIAS) && defined(PITCH_BIAS)
 {
+#if defined(ROLL_BIAS) && defined(PITCH_BIAS)
         q[0] = q0 * qb0 - q1 * qb1 - q2 * qb2 - q3 * qb3;
         q[1] = q1 * qb0 + q0 * qb1 - q3 * qb2 + q2 * qb3;
         q[2] = q2 * qb0 + q3 * qb1 + q0 * qb2 - q1 * qb3;
