@@ -208,7 +208,7 @@ struct ctrl_parameter {
 /* Variable of sd spi timer (ms) */
 WORD Timer1, Timer2;
 
-/* SD card recording status */
+/* SD card recording status (don't need suspend task) */
 #if defined(REC_ONE_CYCLE_MODE) 
   uint8_t rec_status = REC_STATUS_PROCESS_START;
 #elif defined(REC_THROTTLE_TRIGGER_MODE)
@@ -718,10 +718,8 @@ void rec_data(void *data)
   if ((rec_status & REC_STATUS_PROCESS_MASK) == REC_STATUS_PROCESS_UNDONE) {
 #ifdef REC_ONE_CYCLE_MODE
     if (current_tick > pdMS_TO_TICKS(REC_CYCLE_MS)) {
-      vTaskSuspendAll();
       rec_status &= ~REC_STATUS_PROCESS_MASK;
       rec_status |= REC_STATUS_PROCESS_END;
-      xTaskResumeAll();
       return;
     }
 #endif
@@ -754,12 +752,12 @@ void rec_data(void *data)
     }
     vTaskSuspendAll();
     write_size = xStreamBufferSend(sd_buf_handler, data, size, 0);
+    xTaskResumeAll();
     if (write_size < size) {
       rec_status &= ~REC_STATUS_PROCESS_MASK;
       rec_status |= REC_STATUS_WRITE_BUFFER_ERROR |
                     REC_STATUS_PROCESS_END;
     }
-    xTaskResumeAll();
   }
 }
 
@@ -927,15 +925,15 @@ static void sd_task(void *param)
   FRESULT fres;
   char buffer[512];
   UINT size, rm;
-  uint8_t status;
   BaseType_t buf_reset_status = 0;
+  uint8_t status;
   uint8_t process;
 
   while(1) {
     process = rec_status & REC_STATUS_PROCESS_MASK;
     if (process == REC_STATUS_PROCESS_START) {
-      status = rec_status;
       buf_reset_status = xStreamBufferReset(sd_buf_handler);
+      status = rec_status;
 
       if (buf_reset_status == pdPASS) {
         f_mount(&fs, "", 0);
@@ -952,26 +950,21 @@ static void sd_task(void *param)
       } else {
         status |= REC_STATUS_PROCESS_IDLE | REC_STATUS_BUFFER_RESET_ERROR; 
       }
+      /* Delay 100 ms to wait send/receive buffer completed */
       vTaskDelay(pdMS_TO_TICKS(100));
-      vTaskSuspendAll();
       rec_status = status;
-      xTaskResumeAll();
     } else if (process == REC_STATUS_PROCESS_UNDONE) {
       size = xStreamBufferReceive(sd_buf_handler, buffer, 512,
                                   pdMS_TO_TICKS(100));
       f_write(&fil, buffer, size, &rm);
 
       if (size != rm) {
-        vTaskSuspendAll();
         rec_status &= ~REC_STATUS_PROCESS_MASK;
         rec_status |= REC_STATUS_PROCESS_END | REC_STATUS_WRITE_SD_ERROR;
-        xTaskResumeAll();
       }
     } else if (process == REC_STATUS_PROCESS_END) {
-      vTaskSuspendAll();
       rec_status &= ~REC_STATUS_PROCESS_MASK;
       rec_status |= REC_STATUS_PROCESS_IDLE;
-      xTaskResumeAll();
       f_close(&fil);
       f_mount(NULL, "", 0);
       SEGGER_SYSVIEW_Print("sd_close");
@@ -1047,7 +1040,7 @@ uint16_t thrust2duty(float thrust)
     thrust = 0.35f;
   else if (thrust > MAX_THRUST) /* limit max thrust */
     thrust = 7.f;
-  // duty = 762.99 * sqrtf(thrust) - 284.9;
+
   duty = (sqrtf(thrust * 3420.f) - 18) * 12.5f;
 
   return (uint16_t)duty;
@@ -1073,8 +1066,6 @@ static void ctrl_task(void *param)
   };
   /* M1 (CCW) M2 (CW)
    * M4 (CW)  M3 (CCW) */
-  /* M1 (CCW) M3 (CW)
-   * M2 (CW)  M4 (CCW) */
   while (1) {
     vTaskSuspendAll();
     thro_duty = throttle;
@@ -1092,10 +1083,8 @@ static void ctrl_task(void *param)
 #ifdef REC_THROTTLE_TRIGGER_MODE
       if ((rec_status & REC_STATUS_PROCESS_MASK) == 
            REC_STATUS_PROCESS_UNDONE) {
-        vTaskSuspendAll();
         rec_status &= ~REC_STATUS_PROCESS_MASK;
         rec_status |= REC_STATUS_PROCESS_END;
-        xTaskResumeAll();
       }
 #endif
       motor[0] = thro_duty;
@@ -1111,14 +1100,10 @@ static void ctrl_task(void *param)
     } else {
 #ifdef REC_THROTTLE_TRIGGER_MODE
       if ((rec_status & REC_STATUS_PROCESS_MASK) == REC_STATUS_PROCESS_IDLE) {
-        vTaskSuspendAll();
         rec_status &= ~REC_STATUS_PROCESS_MASK;
         rec_status |= REC_STATUS_PROCESS_START;
-        xTaskResumeAll();
       }
 #endif
-      // thro_thrust = ((float)(thro_duty) + 284.9f) / 726.99f; /* throttle to thrust */
-      // thro_thrust *= thro_thrust;
       thro_thrust = (float)thro_duty * 0.08f + 18.2f;
       thro_thrust *= thro_thrust * 0.0002924f;
       set_PID(&PID_roll, P, I, D);
@@ -1159,7 +1144,7 @@ static void msg_task(void *param)
   BaseType_t min_remaining, remaining;
   char msg[512];
   uint16_t size;
-  uint8_t watch_rec_status;
+  uint8_t tmp_rec_status;
   TickType_t cur_tick;
 
 	while (1) {
@@ -1175,7 +1160,7 @@ static void msg_task(void *param)
     ack_pl.yaw = ENCODE_PAYLOAD_RADIUS(att.yaw);
     ack_pl.height = ENCODE_PAYLOAD_HEIGHT(pos.height);
     ack_pl.voltage = ENCODE_PAYLOAD_VOLTAGE(bat.voltage);
-    watch_rec_status = rec_status;
+    tmp_rec_status = rec_status;
     cur_tick = current_tick;
     xTaskResumeAll();
 
@@ -1209,7 +1194,7 @@ static void msg_task(void *param)
                     ctrl_param.P, ctrl_param.I, ctrl_param.D, ack_pl.event,
                     radio_wm, sensor_wm, tof_wm, gps_wm,
                     sd_wm, adc_wm, ctrl_wm, msg_wm,
-                    min_remaining, remaining, watch_rec_status, cur_tick,
+                    min_remaining, remaining, tmp_rec_status, cur_tick,
                     gps_nav_sol_data->iTOW, gps_data_status);
     CDC_Transmit_FS((uint8_t *)msg, size);
     vTaskDelay(pdMS_TO_TICKS(200));
