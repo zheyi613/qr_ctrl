@@ -105,9 +105,9 @@ enum {
 #define SD_BUFFER_LEVEL     512
 
 /* SD recording mode configuration */
-#define REC_ONE_CYCLE_MODE
-// #define REC_THROTTLE_TRIGGER_MODE
+// #define REC_ONE_CYCLE_MODE
 #define REC_CYCLE_MS        10000
+#define REC_THROTTLE_TRIGGER_MODE
 
 /* Select SD recording data */
 #define REC_IMU
@@ -463,8 +463,10 @@ int main(void)
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_4);
 #endif
 	vSetVarulMaxPRIGROUPValue();
+#if (SEGGER_UART_REC == 1)
 	SEGGER_UART_init(1500000);
 	SEGGER_SYSVIEW_Conf();
+#endif
 #ifdef RADIO_TASK
   status = xTaskCreate(radio_task, "radio_task", 200, NULL, 4, &radio_handler);
 	configASSERT(status == pdPASS);
@@ -484,6 +486,8 @@ int main(void)
 #ifdef SD_TASK
   status = xTaskCreate(sd_task, "sd_task", 600, NULL, 3, &sd_handler);
   configASSERT(status == pdPASS);
+  sd_buf_handler = xStreamBufferCreate(SD_BUFFER_SIZE, SD_BUFFER_LEVEL);
+  configASSERT(sd_buf_handler);
 #endif
 #ifdef ADC_TASK
 	status = xTaskCreate(adc_task, "adc_task", 200, NULL, 3, &adc_handler);
@@ -714,8 +718,10 @@ void rec_data(void *data)
   if ((rec_status & REC_STATUS_PROCESS_MASK) == REC_STATUS_PROCESS_UNDONE) {
 #ifdef REC_ONE_CYCLE_MODE
     if (current_tick > pdMS_TO_TICKS(REC_CYCLE_MS)) {
+      vTaskSuspendAll();
       rec_status &= ~REC_STATUS_PROCESS_MASK;
       rec_status |= REC_STATUS_PROCESS_END;
+      xTaskResumeAll();
       return;
     }
 #endif
@@ -748,12 +754,12 @@ void rec_data(void *data)
     }
     vTaskSuspendAll();
     write_size = xStreamBufferSend(sd_buf_handler, data, size, 0);
-    xTaskResumeAll();
     if (write_size < size) {
       rec_status &= ~REC_STATUS_PROCESS_MASK;
       rec_status |= REC_STATUS_WRITE_BUFFER_ERROR |
                     REC_STATUS_PROCESS_END;
     }
+    xTaskResumeAll();
   }
 }
 
@@ -921,42 +927,51 @@ static void sd_task(void *param)
   FRESULT fres;
   char buffer[512];
   UINT size, rm;
+  uint8_t status;
+  BaseType_t buf_reset_status = 0;
   uint8_t process;
 
   while(1) {
     process = rec_status & REC_STATUS_PROCESS_MASK;
     if (process == REC_STATUS_PROCESS_START) {
-      f_mount(&fs, "", 0);
-      fres = f_open(&fil, "uav_rec.txt", FA_CREATE_ALWAYS | FA_WRITE | FA_READ);
+      status = rec_status;
+      buf_reset_status = xStreamBufferReset(sd_buf_handler);
 
-      if (fres == FR_OK) {
-        sd_buf_handler = xStreamBufferCreate(SD_BUFFER_SIZE, SD_BUFFER_LEVEL);
+      if (buf_reset_status == pdPASS) {
+        f_mount(&fs, "", 0);
+        fres = f_open(&fil, "uav_rec.txt", FA_CREATE_ALWAYS | FA_WRITE);
 
-        if (sd_buf_handler == NULL) {
-          f_close(&fil);
-          f_mount(NULL, "", 0);
-          rec_status = REC_STATUS_PROCESS_IDLE |
-                       REC_STATUS_BUFFER_CREATE_ERROR;
+        if (fres == FR_OK) {
+          status &= ~REC_STATUS_FILESYSTEM_ERROR;
+          status = REC_STATUS_PROCESS_UNDONE;
         } else {
-
-          rec_status = REC_STATUS_PROCESS_UNDONE;
+          status = REC_STATUS_PROCESS_IDLE | REC_STATUS_FILESYSTEM_ERROR;
         }
+        
+        status &= ~REC_STATUS_BUFFER_RESET_ERROR;
       } else {
-        rec_status = REC_STATUS_PROCESS_IDLE | REC_STATUS_FILESYSTEM_ERROR;
+        status |= REC_STATUS_PROCESS_IDLE | REC_STATUS_BUFFER_RESET_ERROR; 
       }
+      vTaskDelay(pdMS_TO_TICKS(100));
+      vTaskSuspendAll();
+      rec_status = status;
+      xTaskResumeAll();
     } else if (process == REC_STATUS_PROCESS_UNDONE) {
       size = xStreamBufferReceive(sd_buf_handler, buffer, 512,
                                   pdMS_TO_TICKS(100));
       f_write(&fil, buffer, size, &rm);
 
       if (size != rm) {
+        vTaskSuspendAll();
         rec_status &= ~REC_STATUS_PROCESS_MASK;
         rec_status |= REC_STATUS_PROCESS_END | REC_STATUS_WRITE_SD_ERROR;
+        xTaskResumeAll();
       }
     } else if (process == REC_STATUS_PROCESS_END) {
+      vTaskSuspendAll();
       rec_status &= ~REC_STATUS_PROCESS_MASK;
       rec_status |= REC_STATUS_PROCESS_IDLE;
-      vStreamBufferDelete(sd_buf_handler);
+      xTaskResumeAll();
       f_close(&fil);
       f_mount(NULL, "", 0);
       SEGGER_SYSVIEW_Print("sd_close");
@@ -1074,6 +1089,15 @@ static void ctrl_task(void *param)
     xTaskResumeAll();
 
     if (thro_duty < 200) {
+#ifdef REC_THROTTLE_TRIGGER_MODE
+      if ((rec_status & REC_STATUS_PROCESS_MASK) == 
+           REC_STATUS_PROCESS_UNDONE) {
+        vTaskSuspendAll();
+        rec_status &= ~REC_STATUS_PROCESS_MASK;
+        rec_status |= REC_STATUS_PROCESS_END;
+        xTaskResumeAll();
+      }
+#endif
       motor[0] = thro_duty;
       motor[1] = thro_duty;
       motor[2] = thro_duty;
@@ -1085,6 +1109,14 @@ static void ctrl_task(void *param)
       PID_pitch.int_err = 0.f;
       PID_yaw.int_err = 0.f;
     } else {
+#ifdef REC_THROTTLE_TRIGGER_MODE
+      if ((rec_status & REC_STATUS_PROCESS_MASK) == REC_STATUS_PROCESS_IDLE) {
+        vTaskSuspendAll();
+        rec_status &= ~REC_STATUS_PROCESS_MASK;
+        rec_status |= REC_STATUS_PROCESS_START;
+        xTaskResumeAll();
+      }
+#endif
       // thro_thrust = ((float)(thro_duty) + 284.9f) / 726.99f; /* throttle to thrust */
       // thro_thrust *= thro_thrust;
       thro_thrust = (float)thro_duty * 0.08f + 18.2f;

@@ -17,8 +17,8 @@
 
 /* Low layer error in diskio */
 #define REC_STATUS_FILESYSTEM_ERROR         (1U << 2)
-/* Not enough memory to allocate buffer */
-#define REC_STATUS_BUFFER_CREATE_ERROR      (1U << 3)
+/* Reset buffer error (send/receive data is ongoing) */
+#define REC_STATUS_BUFFER_RESET_ERROR       (1U << 3)
 /* Data size not match when writing to buffer */
 #define REC_STATUS_WRITE_BUFFER_ERROR       (1U << 4)
 /* Data size not match when writing to SD card */
