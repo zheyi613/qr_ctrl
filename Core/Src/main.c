@@ -220,7 +220,7 @@ uint8_t gps_rx_buf_id;
 uint8_t *gps_rx_ptr;
 uint16_t gps_rx_cnt;
 uint8_t gps_receive_status;
-uint8_t gps_data_status;
+uint8_t gps_sv_status; /* 0: cksum not pass or svNum = 0, else: svNum */
 uint16_t gps_data_length;
 struct gps_nav_sol {
   uint32_t iTOW;
@@ -696,16 +696,16 @@ static void radio_task(void *param)
     nrf24l01p_write_ack_payload((uint8_t *)&ack_pl, ACK_PAYLOAD_WIDTH);
     /* decode payload */
     if (pl.throttle < MAX_THROTTLE && pl.throttle >= 0)
-      throttle = DECODE_PAYLOAD_THROTTLE(pl.throttle);
-    att.roll_target = DECODE_PAYLOAD_RADIUS(pl.roll_target);
-    att.pitch_target = DECODE_PAYLOAD_RADIUS(pl.pitch_target);
+      DECODE_PAYLOAD_THROTTLE(pl.throttle, throttle);
+    DECODE_PAYLOAD_RADIUS(pl.roll_target, att.roll_target);
+    DECODE_PAYLOAD_RADIUS(pl.pitch_target, att.pitch_target);
     // if (pl->yaw_target > 1.f || pl->yaw_target < -1.f)
     //   att->yaw_target += DECODE_PAYLOAD_RADIUS(pl.yaw_target);
-    pos.height_target = DECODE_PAYLOAD_HEIGHT(pl.height_target);
-    ctrl_param.P = DECODE_PAYLOAD_CTRL_GAIN(pl.P);
-    ctrl_param.I = DECODE_PAYLOAD_CTRL_GAIN(pl.I);
-    ctrl_param.D = DECODE_PAYLOAD_CTRL_GAIN(pl.D);
-    ctrl_param.mode = DECODE_PAYLOAD_CTRL_MODE(pl.mode);
+    DECODE_PAYLOAD_HEIGHT(pl.height_target, pos.height_target);
+    DECODE_PAYLOAD_CTRL_GAIN(pl.P, ctrl_param.P);
+    DECODE_PAYLOAD_CTRL_GAIN(pl.I, ctrl_param.I);
+    DECODE_PAYLOAD_CTRL_GAIN(pl.D, ctrl_param.D);
+    DECODE_PAYLOAD_CTRL_MODE(pl.mode, ctrl_param.mode);
   }
 }
 
@@ -896,7 +896,7 @@ static void gps_task(void *param)
       gps_nav_sol_data = (struct gps_nav_sol *)(idle_buf_ptr + 4);
       gps_rx_cnt = 0;
       gps_receive_status = GPS_RECEIVE_SYNC_1;
-      gps_data_status = 0;
+      gps_sv_status = 0;
       __HAL_UART_ENABLE_IT(&huart2, UART_IT_RXNE);
       start_flag = 0;
     }
@@ -912,9 +912,9 @@ static void gps_task(void *param)
       CK_B += CK_A;
     }
     if ((*idle_buf_ptr == CK_A) && (*(idle_buf_ptr + 1) == CK_B))
-      gps_data_status = 1;
+      gps_sv_status = gps_nav_sol_data->numSV;
     else
-      gps_data_status = 0;
+      gps_sv_status = 0;
   }
 }
 
@@ -1144,24 +1144,23 @@ static void msg_task(void *param)
   BaseType_t min_remaining, remaining;
   char msg[512];
   uint16_t size;
-  uint8_t tmp_rec_status;
-  TickType_t cur_tick;
 
 	while (1) {
     /* encode ack payload */
     vTaskSuspendAll();
-    ack_pl.throttle = ENCODE_PAYLOAD_THROTTLE(throttle);
-    ack_pl.motor[0] = ENCODE_PAYLOAD_MOTOR(motor[0]);
-    ack_pl.motor[1] = ENCODE_PAYLOAD_MOTOR(motor[1]);
-    ack_pl.motor[2] = ENCODE_PAYLOAD_MOTOR(motor[2]);
-    ack_pl.motor[3] = ENCODE_PAYLOAD_MOTOR(motor[3]);
-    ack_pl.roll = ENCODE_PAYLOAD_RADIUS(att.roll);
-    ack_pl.pitch = ENCODE_PAYLOAD_RADIUS(att.pitch);
-    ack_pl.yaw = ENCODE_PAYLOAD_RADIUS(att.yaw);
-    ack_pl.height = ENCODE_PAYLOAD_HEIGHT(pos.height);
-    ack_pl.voltage = ENCODE_PAYLOAD_VOLTAGE(bat.voltage);
-    tmp_rec_status = rec_status;
-    cur_tick = current_tick;
+    ENCODE_PAYLOAD_THROTTLE(throttle, ack_pl.throttle);
+    ENCODE_PAYLOAD_MOTOR(motor[0], ack_pl.motor[0]);
+    ENCODE_PAYLOAD_MOTOR(motor[1], ack_pl.motor[1]);
+    ENCODE_PAYLOAD_MOTOR(motor[2], ack_pl.motor[2]);
+    ENCODE_PAYLOAD_MOTOR(motor[3], ack_pl.motor[3]);
+    ENCODE_PAYLOAD_RADIUS(att.roll, ack_pl.roll);
+    ENCODE_PAYLOAD_RADIUS(att.pitch, ack_pl.pitch);
+    ENCODE_PAYLOAD_RADIUS(att.yaw, ack_pl.yaw);
+    ENCODE_PAYLOAD_HEIGHT(pos.height, ack_pl.height);
+    ENCODE_PAYLOAD_VOLTAGE(bat.voltage, ack_pl.voltage);
+    ENCODE_PAYLOAD_REC_STATUS(rec_status, ack_pl.rec_status);
+    ENCODE_PAYLOAD_GPS_SV_STATUS(gps_sv_status, ack_pl.gps_sv_status);
+    ENCODE_PAYLOAD_GPS_PACC(gps_nav_sol_data->pAcc, ack_pl.gps_pAcc);
     xTaskResumeAll();
 
     radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
@@ -1180,22 +1179,28 @@ static void msg_task(void *param)
                     "rsp: %.3f, psp: %.3f, ysp: %.3f\r\n"
                     "h: %.2f, d: %d, V: %.2f, I: %.2F\r\n"
                     "throttle: %d, m0: %d, m1: %d, m2: %d, m3: %d\r\n"
-                    "P: %.2f, I: %.2f, D: %.2f, crash: %d\r\n"
+                    "P: %.2f, I: %.2f, D: %.2f\r\n"
                     "stack wm:\r\n"
                     "radio: %ld, sensor: %ld, tof: %ld, gps: %ld\r\n"
                     "sd: %ld, adc: %ld, ctrl: %ld, msg: %ld\r\n"
                     "min rm: %ld, cur rm: %ld, rec status: %d\r\n"
                     "current tick: %ld\r\n"
-                    "gps week time: %ld, cksum: %d\r\n",
+                    "gps:\r\n"
+                    "iTOW: %ld, gpsFix: %d\r\n"
+                    "ecefX: %ld, ecefY: %ld, ecefZ: %ld\r\n"
+                    "pAcc: %ld, numSV: %d\r\n",
 			              att.roll, att.pitch, att.yaw,
                     att.roll_target, att.pitch_target, att.yaw_target,
              		    pos.height, sensor.distance, bat.voltage, bat.current,
                     throttle, motor[0], motor[1], motor[2], motor[3],
-                    ctrl_param.P, ctrl_param.I, ctrl_param.D, ack_pl.event,
+                    ctrl_param.P, ctrl_param.I, ctrl_param.D,
                     radio_wm, sensor_wm, tof_wm, gps_wm,
                     sd_wm, adc_wm, ctrl_wm, msg_wm,
-                    min_remaining, remaining, tmp_rec_status, cur_tick,
-                    gps_nav_sol_data->iTOW, gps_data_status);
+                    min_remaining, remaining, rec_status, current_tick,
+                    gps_nav_sol_data->iTOW, gps_nav_sol_data->gpsFix,
+                    gps_nav_sol_data->ecefX, gps_nav_sol_data->ecefY,
+                    gps_nav_sol_data->ecefZ, gps_nav_sol_data->pAcc,
+                    gps_nav_sol_data->numSV);
     CDC_Transmit_FS((uint8_t *)msg, size);
     vTaskDelay(pdMS_TO_TICKS(200));
 	}
