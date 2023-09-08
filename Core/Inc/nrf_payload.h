@@ -41,8 +41,8 @@ struct ack_payload {
 
 /* Decode for payload */
 #define DECODING_RADIUS         9.587378e-5F
-#define DECODING_DEGREE         182.044444F
-#define DECODING_HEIGHT         0.001F
+#define DECODING_DEGREE         0.005493164F
+#define DECODING_HEIGHT         0.01F
 #define DECODING_VOLTAGE        0.1F
 #define DECODING_CURRENT        0.1F
 #define DECODING_CTRL_GAIN      0.05F
@@ -72,7 +72,7 @@ struct ack_payload {
 
 /* Encode for payload */
 #define ENCODING_RADIUS         10430.378F
-#define ENCODING_DEGREE         0.005493164F
+#define ENCODING_DEGREE         182.044444F
 #define ENCODING_HEIGHT         100.F
 #define ENCODING_VOLTAGE        10.F
 #define ENCODING_CURRENT        10.F

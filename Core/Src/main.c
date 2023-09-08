@@ -377,8 +377,8 @@ int main(void)
   HAL_Delay(5000);
   HAL_Delay(5000);
   #endif
-  
-  HAL_Delay(200);
+  /* Wait 1 sec to power up and mechanical vibration */
+  HAL_Delay(1000);
 
   set_bus_mode(BUS_POLLING_MODE); /* set bus to blocking mode */
 
