@@ -94,8 +94,10 @@ struct ack_payload {
         do {                                    \
                 if ((src >= 0) && (src < 25.4F))                        \
                         dst = (uint8_t)(src * ENCODING_CURRENT);        \
-                else if ((src < 0) && (src > -25.4F))                   \
-                        dst = (uint8_t)(src * ENCODING_CURRENT);        \
+                else if (src > 25.4)                                    \
+                        dst = 255;                                      \
+                else                                                    \
+                        dst = 0;                                        \
         } while (0)
 #define ENCODE_PAYLOAD_REC_STATUS(src, dst)     \
         dst = (uint8_t)(src)
