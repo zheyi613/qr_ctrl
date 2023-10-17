@@ -220,9 +220,9 @@ void ahrs_init_imu(float ax, float ay, float az)
 /**
  * @brief Update attitute with 9-dof sensor data
  * 
- * @param gx gyroscope x (ras/s)
- * @param gy gyroscope y (ras/s)
- * @param gz gyroscope z (ras/s)
+ * @param gx gyroscope x (rad/s)
+ * @param gy gyroscope y (rad/s)
+ * @param gz gyroscope z (rad/s)
  * @param ax acceleration x
  * @param ay acceleration y
  * @param az acceleration z
@@ -315,9 +315,9 @@ void ahrs_update(float gx, float gy, float gz,
 /**
  * @brief Update attitute with 6-dof sensor data
  * 
- * @param gx gyroscope x (ras/s)
- * @param gy gyroscope y (ras/s)
- * @param gz gyroscope z (ras/s)
+ * @param gx gyroscope x (rad/s)
+ * @param gy gyroscope y (rad/s)
+ * @param gz gyroscope z (rad/s)
  * @param ax acceleration x
  * @param ay acceleration y
  * @param az acceleration z

@@ -9,20 +9,21 @@
 
 #include "stdint.h"
 
-#define REC_STATUS_PROCESS_MASK             (1U << 0 | 1U << 1)
-#define REC_STATUS_PROCESS_START            (0U << 0)
-#define REC_STATUS_PROCESS_UNDONE           (1U << 0)
-#define REC_STATUS_PROCESS_END              (2U << 0)
-#define REC_STATUS_PROCESS_IDLE             (3U << 0)
+#define REC_STATUS_PROCESS_MASK             (1U << 0 | 1U << 1 | 1U << 2)
+#define REC_STATUS_PROCESS_INIT             (0U << 0)
+#define REC_STATUS_PROCESS_IDLE             (1U << 0)
+#define REC_STATUS_PROCESS_START            (2U << 0)
+#define REC_STATUS_PROCESS_UNDONE           (3U << 0)
+#define REC_STATUS_PROCESS_END              (4U << 0)
 
 /* Low layer error in diskio */
-#define REC_STATUS_FILESYSTEM_ERROR         (1U << 2)
+#define REC_STATUS_FILESYSTEM_ERROR         (1U << 3)
 /* Reset buffer error (send/receive data is ongoing) */
-#define REC_STATUS_BUFFER_RESET_ERROR       (1U << 3)
+#define REC_STATUS_BUFFER_RESET_ERROR       (1U << 4)
 /* Data size not match when writing to buffer */
-#define REC_STATUS_WRITE_BUFFER_ERROR       (1U << 4)
+#define REC_STATUS_WRITE_BUFFER_ERROR       (1U << 5)
 /* Data size not match when writing to SD card */
-#define REC_STATUS_WRITE_SD_ERROR           (1U << 5)
+#define REC_STATUS_WRITE_SD_ERROR           (1U << 6)
 
 
 #define REC_MARK_IMU                        1
@@ -76,7 +77,6 @@ struct rec_battery {
 struct rec_att {
         uint32_t mark;
         uint32_t tick;
-        float q[4];
         float roll;
         float pitch;
         float yaw;

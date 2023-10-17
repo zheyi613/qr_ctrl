@@ -56,9 +56,9 @@
 /* USER CODE BEGIN PD */
 
 /* Configure tasks to enable */
-#define RADIO_TASK
+// #define RADIO_TASK
 #define SENSOR_TASK
-// #define TOF_TASK
+#define TOF_TASK
 #define GPS_TASK
 #define SD_TASK
 #define ADC_TASK
@@ -113,8 +113,9 @@ enum {
 #define REC_IMU
 #define REC_MAG
 #define REC_BARO
-#define REC_TOF
+// #define REC_TOF
 #define REC_BATTERY
+#define REC_ATT
 #define REC_CTRL
 
 /* GPS header and address ID of NAV_SOL */
@@ -209,11 +210,8 @@ struct ctrl_parameter {
 WORD Timer1, Timer2;
 
 /* SD card recording status (don't need suspend task) */
-#if defined(REC_ONE_CYCLE_MODE) 
-  uint8_t rec_status = REC_STATUS_PROCESS_START;
-#elif defined(REC_THROTTLE_TRIGGER_MODE)
-  uint8_t rec_status = REC_STATUS_PROCESS_IDLE;
-#endif
+uint8_t rec_status = REC_STATUS_PROCESS_INIT;
+
 /* GPS buffer (transfer by double buffer) */
 uint8_t gps_buffer[2][GPS_BUFFER_SIZE];
 uint8_t gps_rx_buf_id;
@@ -428,7 +426,8 @@ int main(void)
 	if (lps22hb_init(lps22hb))
     module_init_failed(MODULE_FAILED_LPS22HB);
   
-	if (icm20948_init(1125, GYRO_2000_DPS, ACCEL_16G, LP_BW_119HZ))
+	if (icm20948_init(1125, GYRO_2000_DPS, ACCEL_16G, GYRO_LP_119HZ,
+                    ACCEL_LP_23HZ))
     module_init_failed(MODULE_FAILED_ICM20948);
 
   if (ak09916_init(AK09916_100HZ_MODE))
@@ -684,6 +683,7 @@ void USART2_IRQHandler(void)
 static void radio_task(void *param)
 {
   uint8_t start_flag = 1;
+  float yaw_input = 0.f;
 
   while (1) {
     if (start_flag) {
@@ -699,8 +699,11 @@ static void radio_task(void *param)
       DECODE_PAYLOAD_THROTTLE(pl.throttle, throttle);
     DECODE_PAYLOAD_RADIUS(pl.roll_target, att.roll_target);
     DECODE_PAYLOAD_RADIUS(pl.pitch_target, att.pitch_target);
-    // if (pl->yaw_target > 1.f || pl->yaw_target < -1.f)
-    //   att->yaw_target += DECODE_PAYLOAD_RADIUS(pl.yaw_target);
+    /* Yaw input need to higher than 0.1 deg */
+    if (pl.yaw_target > 18 || pl.yaw_target < -18) {
+      DECODE_PAYLOAD_RADIUS(pl.yaw_target, yaw_input);
+      att.yaw_target += yaw_input;
+    }
     DECODE_PAYLOAD_HEIGHT(pl.height_target, pos.height_target);
     DECODE_PAYLOAD_CTRL_GAIN(pl.P, ctrl_param.P);
     DECODE_PAYLOAD_CTRL_GAIN(pl.I, ctrl_param.I);
@@ -778,6 +781,9 @@ static void sensor_task(void *param)
   struct rec_baro baro_data = {
     REC_MARK_BARO, 0, 0, 0, 0
   };
+  struct rec_att att_data = {
+    REC_MARK_ATT, 0, 0, 0
+  };
 
   while (1) {
     current_tick = xTaskGetTickCount();
@@ -845,7 +851,10 @@ static void sensor_task(void *param)
       ahrs_update_imu(gx, gy, gz, ax, ay, az, dt);
     ahrs2euler(&att.roll, &att.pitch, &att.yaw);
     ahrs2quat(att.q);
-
+#ifdef REC_ATT
+    memcpy(&att_data.roll, &att.roll, 12);
+    rec_data(&att_data);
+#endif
     vTaskDelay(pdMS_TO_TICKS(2));
   }
 }
@@ -926,12 +935,37 @@ static void sd_task(void *param)
   char buffer[512];
   UINT size, rm;
   BaseType_t buf_reset_status = 0;
+  DSTATUS init_status;
   uint8_t status;
   uint8_t process;
 
   while(1) {
     process = rec_status & REC_STATUS_PROCESS_MASK;
-    if (process == REC_STATUS_PROCESS_START) {
+    if (process == REC_STATUS_PROCESS_UNDONE) {
+      size = xStreamBufferReceive(sd_buf_handler, buffer, 512,
+                                  pdMS_TO_TICKS(100));
+      f_write(&fil, buffer, size, &rm);
+
+      if (size != rm) {
+        rec_status &= ~REC_STATUS_PROCESS_MASK;
+        rec_status |= REC_STATUS_PROCESS_END | REC_STATUS_WRITE_SD_ERROR;
+      }
+    } else if (process == REC_STATUS_PROCESS_INIT) {
+      /* Try to initialize SD card first */
+      init_status = disk_initialize(0);
+
+      if (init_status == 0) {
+        #if defined(REC_ONE_CYCLE_MODE) 
+          rec_status = REC_STATUS_PROCESS_START;
+        #elif defined(REC_THROTTLE_TRIGGER_MODE)
+          rec_status = REC_STATUS_PROCESS_IDLE;
+        #endif
+      } else {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+      }
+    } else if (process == REC_STATUS_PROCESS_IDLE) {
+      vTaskDelay(pdMS_TO_TICKS(1000));
+    } else if (process == REC_STATUS_PROCESS_START) {
       buf_reset_status = xStreamBufferReset(sd_buf_handler);
       status = rec_status;
 
@@ -948,28 +982,17 @@ static void sd_task(void *param)
         
         status &= ~REC_STATUS_BUFFER_RESET_ERROR;
       } else {
-        status |= REC_STATUS_PROCESS_IDLE | REC_STATUS_BUFFER_RESET_ERROR; 
+        status |= REC_STATUS_PROCESS_IDLE | REC_STATUS_BUFFER_RESET_ERROR;
       }
       /* Delay 100 ms to wait send/receive buffer completed */
       vTaskDelay(pdMS_TO_TICKS(100));
       rec_status = status;
-    } else if (process == REC_STATUS_PROCESS_UNDONE) {
-      size = xStreamBufferReceive(sd_buf_handler, buffer, 512,
-                                  pdMS_TO_TICKS(100));
-      f_write(&fil, buffer, size, &rm);
-
-      if (size != rm) {
-        rec_status &= ~REC_STATUS_PROCESS_MASK;
-        rec_status |= REC_STATUS_PROCESS_END | REC_STATUS_WRITE_SD_ERROR;
-      }
     } else if (process == REC_STATUS_PROCESS_END) {
       rec_status &= ~REC_STATUS_PROCESS_MASK;
       rec_status |= REC_STATUS_PROCESS_IDLE;
       f_close(&fil);
       f_mount(NULL, "", 0);
       SEGGER_SYSVIEW_Print("sd_close");
-    } else {
-      vTaskDelay(pdMS_TO_TICKS(1000));
     }
   }
 }
@@ -988,10 +1011,12 @@ static void adc_task(void *param)
       start_flag = 0;
     }
     ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
-    /* voltage = adc / 4096 * 3.3 / 10k * (10k + 51k) */
+    /* Voltage = adc / 4096 * 3.3 / 10k * (10k + 51k) */
     bat.voltage = (float)data[0] * 0.0049145507f;
-    /* current = ((adc / 4096 * 3.3) - 2.4677) / 0.0328 */
-    bat.current = (float)data[1] * 0.00080566406f - 2.4677f;
+    /* Original current = ((adc / 4096 * 3.3) - 2.4677) / 0.0328
+     * Vcc: 5V, Current direction: negative, Range: 0 ~ 2.5V
+     * Current = (2.4677 - (adc / 4096 * 3.3)) / 0.0328 */
+    bat.current = 2.4677f - (float)data[1] * 0.00080566406f;
     bat.current /= 0.0328f;
 #ifdef REC_BATTERY
     bat_data.voltage = bat.voltage;
@@ -1177,7 +1202,7 @@ static void msg_task(void *param)
 
 		size = snprintf(msg, 512, "r: %.3f, p: %.3f, y: %.3f, "
                     "rsp: %.3f, psp: %.3f, ysp: %.3f\r\n"
-                    "h: %.2f, d: %d, V: %.2f, I: %.2F\r\n"
+                    "h: %.2f, d: %d, V: %.2f, I: %.2f\r\n"
                     "throttle: %d, m0: %d, m1: %d, m2: %d, m3: %d\r\n"
                     "P: %.2f, I: %.2f, D: %.2f\r\n"
                     "stack wm:\r\n"

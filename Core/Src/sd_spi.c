@@ -229,10 +229,10 @@ DSTATUS disk_initialize(BYTE drv)
         }
         // send_cmd(CMD58, 0, R); /* get supported voltage (not mandantory) */
         /* Set HCS = 1 and activate card initialization process */
-        Timer1 = 1000; /* 1 sec timout */
+        Timer1 = 5000; /* 5 sec timout */
         do {
                 resp[0] = send_cmd(ACMD41, 1UL << 30);
-                delay_ms(2);
+                delay_ms(500);
         } while (resp[0] && Timer1);
         if (!Timer1)
                 return stat;

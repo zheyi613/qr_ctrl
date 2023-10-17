@@ -51,20 +51,32 @@ enum accel_fs {
         ACCEL_16G
 };
 
-/* gyro low pass freqency */
-enum low_pass {
-        LP_BW_196HZ, /* accel: 246 Hz */
-        LP_BW_151HZ, /* accel: 246 Hz */
-        LP_BW_119HZ, /* accel: 114 Hz */
-        LP_BW_51HZ,
-        LP_BW_23HZ,
-        LP_BW_11HZ,
-        LP_BW_5HZ,
-        LP_BW_361HZ
+/* Gyro low pass freqency */
+enum gyro_low_pass {
+        GYRO_LP_196HZ,
+        GYRO_LP_151HZ,
+        GYRO_LP_119HZ,
+        GYRO_LP_51HZ,
+        GYRO_LP_23HZ,
+        GYRO_LP_11HZ,
+        GYRO_LP_5HZ,
+        GYRO_LP_361HZ
 };
 
+/* Accel low pass frequency */
+enum accel_low_pass {
+        ACCEL_LP_246HZ = 1,
+        ACCEL_LP_111HZ,
+        ACCEL_LP_50HZ,
+        ACCEL_LP_23HZ,
+        ACCEL_LP_11HZ,
+        ACCEL_LP_5HZ,
+        ACCEL_LP_473HZ
+};
+
+
 int icm20948_init(uint16_t rate, enum gyro_fs g_fs, enum accel_fs a_fs,
-                  enum low_pass lp);
+                  enum gyro_low_pass gyro_lp, enum accel_low_pass accel_lp);
 int icm20948_read_axis6(float *ax, float *ay, float *az,
                         float *gx, float *gy, float *gz);
 #endif /* ICM20948_H */
