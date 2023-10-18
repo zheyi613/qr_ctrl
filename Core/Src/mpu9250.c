@@ -180,7 +180,7 @@ static void calibration(void)
 {
         uint8_t data[12];
         uint16_t i, j, fifo_count, packet_count;
-        int16_t tmp[6]; /* accel[0:2], gyro[3:5] */
+        int16_t tmp;
         int32_t bias[6] = {0}; /* accel[0:2], gyro[3:5] */
 
         /* Reset FIFO and DMP */
@@ -200,31 +200,46 @@ static void calibration(void)
 
         /* Read FIFO count */
         read_reg_multi(MPU9250_ADDRESS, FIFO_COUNTH, data, 2);
-        fifo_count = (uint16_t)(((uint16_t)data[0] << 8) | data[1]);
+        fifo_count = ((uint16_t)data[0] << 8) | data[1];
         packet_count = fifo_count / 12;
 
         for (i = 0; i < packet_count; i++) {
                 read_reg_multi(MPU9250_ADDRESS, FIFO_R_W, data, 12);
 
                 for (j = 0; j < 6; j++) {
-                        tmp[j] = (int16_t)(((int16_t)data[j * 2] << 8) |
-                                                     data[(j * 2) + 1]);
-                        bias[j] += (int32_t)(tmp[j]);
+                        tmp = ((int16_t)data[j * 2] << 8) | data[(j * 2) + 1];
+                        bias[j] += (int32_t)tmp;
                 }
         }
         for (i = 0; i < 6; i++) {
                 bias[i] /= (int32_t)packet_count;
         }
         bias[2] -= 16384;
-// #ifdef ACCEL_CALIBRATION_PARAM
-        data[0] = ((-bias[3]) >> 10) & 0xFF; /* 32.9 LSB deg/s */
-        data[1] = ((-bias[3]) >> 2) & 0xFF;
-        data[2] = ((-bias[4]) >> 10) & 0xFF; /* 32.9 LSB deg/s */
-        data[3] = ((-bias[4]) >> 2) & 0xFF;
-        data[4] = ((-bias[5]) >> 10) & 0xFF; /* 32.9 LSB deg/s */
-        data[5] = ((-bias[5]) >> 2) & 0xFF;
 
+        for (i = 0; i < 3; i++) {
+                data[2 * i] = ((-bias[3 + i]) >> 10) & 0xFF; /* 32.9 LSB deg/s */
+                data[(2 * i) + 1] = ((-bias[3 + i]) >> 2) & 0xFF;
+        }
+        /* Write gyro offset to MPU9250 */
         write_reg_multi(MPU9250_ADDRESS, XG_OFFSET_H, data, 6);
+#ifdef ACCEL_CALIBRATION_PARAM
+        bias[0] = (int32_t)(ACCEL_X_BIAS * 16384.F);
+        bias[1] = (int32_t)(ACCEL_Y_BIAS * 16384.F);
+        bias[2] = (int32_t)(ACCEL_Z_BIAS * 16384.F);
+#endif
+#ifdef ACCEL_CALIBRATION
+        /* Read accel offset from MPU9250 */
+        uint8_t mask_bit;
+        for (i = 0; i < 3; i++) {
+                read_reg_multi(MPU9250_ADDRESS, XA_OFFSET_H + (3 * i), data, 2);
+                tmp = ((int16_t)data[0] << 8) | data[1];
+                mask_bit = tmp & 0x1UL;
+                tmp -= (int16_t)(bias[i] >> 3); /* 2048 LSB/g */
+                data[0] = (tmp >> 8) & 0xFF;
+                data[1] = (tmp & 0xFE) | mask_bit;
+                write_reg_multi(MPU9250_ADDRESS, XA_OFFSET_H + (3 * i), data, 2);
+        }
+#endif
 }
 
 /**

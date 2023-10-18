@@ -57,7 +57,7 @@
 /* USER CODE BEGIN PD */
 
 /* Configure tasks to enable */
-// #define RADIO_TASK
+#define RADIO_TASK
 #define SENSOR_TASK
 // #define TOF_TASK
 #define GPS_TASK
@@ -74,8 +74,8 @@ enum module_init_failed_id {
   MODULE_FAILED_NRF24L01P,
   MODULE_FAILED_TOF,
   MODULE_FAILED_LPS22HB,
-  MODULE_FAILED_ICM20948,
-  MODULE_FAILED_AK09916
+  MODULE_FAILED_MPU9250,
+  MODULE_FAILED_AK8963
 };
 
 #define VL53L1X_ADDR        0x52
@@ -269,11 +269,11 @@ void module_init_failed(enum module_init_failed_id id)
   case MODULE_FAILED_LPS22HB:
     len = snprintf(msg, 100, "Initialize LPS22HB failed...\n");
     break;
-  case MODULE_FAILED_ICM20948:
-    len = snprintf(msg, 100, "Initialize ICM-20948 failed...\n");
+  case MODULE_FAILED_MPU9250:
+    len = snprintf(msg, 100, "Initialize MPU9250 failed...\n");
     break;
-  case MODULE_FAILED_AK09916:
-    len = snprintf(msg, 100, "Initialize AK-09916 failed...\n");
+  case MODULE_FAILED_AK8963:
+    len = snprintf(msg, 100, "Initialize AK8963 failed...\n");
     break;
   default:
     len = snprintf(msg, 100, "Initialize not defined failed...\n");
@@ -426,27 +426,20 @@ int main(void)
 	};
 	if (lps22hb_init(lps22hb))
     module_init_failed(MODULE_FAILED_LPS22HB);
-  
-	// if (icm20948_init(1125, GYRO_2000_DPS, ACCEL_16G, GYRO_LP_119HZ,
-  //                   ACCEL_LP_23HZ))
-  //   module_init_failed(MODULE_FAILED_ICM20948);
-  if (mpu9250_init(1000, GYRO_FS_2000DPS, ACCEL_FS_16G,
-                   GYRO_LP_99HZ, ACCEL_LP_92HZ))
-    module_init_failed(MODULE_FAILED_ICM20948);
 
-  // if (ak09916_init(AK09916_100HZ_MODE))
-  //   module_init_failed(MODULE_FAILED_AK09916);
+  status = mpu9250_init(1000, GYRO_FS_2000DPS, ACCEL_FS_16G,
+                        GYRO_LP_99HZ, ACCEL_LP_92HZ);
+  if (status == 1)
+    module_init_failed(MODULE_FAILED_MPU9250);
+  else if (status == 2)
+    module_init_failed(MODULE_FAILED_AK8963);
 
-  // icm20948_read_axis6(&sensor.ax, &sensor.ay, &sensor.az,
-  //                     &sensor.gx, &sensor.gy, &sensor.gz);
-  // ak09916_read_data(&sensor.mx, &sensor.my, &sensor.mz);
-  // ENU2NED(sensor.ax, sensor.ay, sensor.az);
-  // ENU2NED(sensor.mx, sensor.my, sensor.mz);
-  // ahrs_init(sensor.ax, sensor.ay, sensor.az,
-  //           sensor.mx, sensor.my, sensor.mz);
+  ENU2NED(sensor.ax, sensor.ay, sensor.az);
+  ahrs_init(sensor.ax, sensor.ay, sensor.az,
+            sensor.mx, sensor.my, sensor.mz);
   // ahrs_init_imu(sensor.ax, sensor.ay, sensor.az);
-  // ahrs2euler(&att.roll, &att.pitch, &att.yaw);
-  // att.yaw_target = att.yaw;
+  ahrs2euler(&att.roll, &att.pitch, &att.yaw);
+  att.yaw_target = att.yaw;
 #endif
 
   set_bus_mode(BUS_INTERRUPT_MODE); /* set bus to non blocking mode */
@@ -809,27 +802,25 @@ static void sensor_task(void *param)
 #endif
     }
     if (mag_tick == pdMS_TO_TICKS(10)) {
-//       if (!ak09916_read_data(&mx, &my, &mz)) {
-//         mag_square = mx * mx + my * my + mz * mz;
-//         /* check if disturbed or not by square */
-//         /* 25 uT < norm(mag) < 65 uT */
-//         if (mag_square > 625.f && mag_square < 4225.f) {
-//           /* transform axis to attitude form */
-//           ENU2NED(mx, my, mz);
-//           sensor.mx = mx;
-//           sensor.my = my;
-//           sensor.mz = mz;
-//           mag_err = 0;
-// #ifdef REC_MAG
-//           memcpy(&mag_data.mx, &sensor.mx, 12);
-//           rec_data(&mag_data);
-// #endif
-//         } else {
-//           mag_err = 1;
-//         }
-//       } else {
-//         mag_err = 1;
-//       }
+      if (!mpu9250_read_mag(&mx, &my, &mz)) {
+        mag_square = mx * mx + my * my + mz * mz;
+        /* check if disturbed or not by square */
+        /* 25 uT < norm(mag) < 65 uT */
+        if (mag_square > 625.f && mag_square < 4225.f) {
+          sensor.mx = mx;
+          sensor.my = my;
+          sensor.mz = mz;
+          mag_err = 0;
+#ifdef REC_MAG
+          memcpy(&mag_data.mx, &sensor.mx, 12);
+          rec_data(&mag_data);
+#endif
+        } else {
+          mag_err = 1;
+        }
+      } else {
+        mag_err = 1;
+      }
       mag_tick = 0;
     }
     if (baro_tick == pdMS_TO_TICKS(20)) {
@@ -849,9 +840,9 @@ static void sensor_task(void *param)
     mag_tick++;
     baro_tick++;
     /* Update attitude */
-    // if (!mag_err)
-    //   ahrs_update(gx, gy, gz, ax, ay, az, mx, my, mz, dt);
-    // else
+    if (!mag_err)
+      ahrs_update(gx, gy, gz, ax, ay, az, mx, my, mz, dt);
+    else
       ahrs_update_imu(gx, gy, gz, ax, ay, az, dt);
     ahrs2euler(&att.roll, &att.pitch, &att.yaw);
     ahrs2quat(att.q);
@@ -1173,7 +1164,6 @@ static void msg_task(void *param)
   BaseType_t min_remaining, remaining;
   char msg[512];
   uint16_t size;
-  float r, p, y;
 
 	while (1) {
     /* encode ack payload */
@@ -1191,9 +1181,6 @@ static void msg_task(void *param)
     ENCODE_PAYLOAD_REC_STATUS(rec_status, ack_pl.rec_status);
     ENCODE_PAYLOAD_GPS_SV_STATUS(gps_sv_status, ack_pl.gps_sv_status);
     ENCODE_PAYLOAD_GPS_PACC(gps_nav_sol_data->pAcc, ack_pl.gps_pAcc);
-    r = att.roll * RAD2DEG;
-    p = att.pitch * RAD2DEG;
-    y = att.yaw * RAD2DEG;
     xTaskResumeAll();
 
     radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
@@ -1208,36 +1195,34 @@ static void msg_task(void *param)
     min_remaining = xPortGetMinimumEverFreeHeapSize();
     remaining = xPortGetFreeHeapSize();
 
-		// size = snprintf(msg, 512, "r: %.3f, p: %.3f, y: %.3f, "
-    //                 "rsp: %.3f, psp: %.3f, ysp: %.3f\r\n"
-    //                 "h: %.2f, d: %d, V: %.2f, I: %.2f\r\n"
-    //                 "throttle: %d, m0: %d, m1: %d, m2: %d, m3: %d\r\n"
-    //                 "P: %.2f, I: %.2f, D: %.2f\r\n"
-    //                 "stack wm:\r\n"
-    //                 "radio: %ld, sensor: %ld, tof: %ld, gps: %ld\r\n"
-    //                 "sd: %ld, adc: %ld, ctrl: %ld, msg: %ld\r\n"
-    //                 "min rm: %ld, cur rm: %ld, rec status: %d\r\n"
-    //                 "current tick: %ld\r\n"
-    //                 "gps:\r\n"
-    //                 "iTOW: %ld, gpsFix: %d\r\n"
-    //                 "ecefX: %ld, ecefY: %ld, ecefZ: %ld\r\n"
-    //                 "pAcc: %ld, numSV: %d\r\n",
-		// 	              att.roll, att.pitch, att.yaw,
-    //                 att.roll_target, att.pitch_target, att.yaw_target,
-    //          		    pos.height, sensor.distance, bat.voltage, bat.current,
-    //                 throttle, motor[0], motor[1], motor[2], motor[3],
-    //                 ctrl_param.P, ctrl_param.I, ctrl_param.D,
-    //                 radio_wm, sensor_wm, tof_wm, gps_wm,
-    //                 sd_wm, adc_wm, ctrl_wm, msg_wm,
-    //                 min_remaining, remaining, rec_status, current_tick,
-    //                 gps_nav_sol_data->iTOW, gps_nav_sol_data->gpsFix,
-    //                 gps_nav_sol_data->ecefX, gps_nav_sol_data->ecefY,
-    //                 gps_nav_sol_data->ecefZ, gps_nav_sol_data->pAcc,
-    //                 gps_nav_sol_data->numSV);
-    size = snprintf(msg, 512, "r: %.2f, p: %.2f, y: %.2f, press: %.2f, temp: %.2f\n",
-                              r, p, y, sensor.pressure, sensor.temperature);
+		size = snprintf(msg, 512, "r: %.3f, p: %.3f, y: %.3f, "
+                    "rsp: %.3f, psp: %.3f, ysp: %.3f\r\n"
+                    "h: %.2f, d: %d, V: %.2f, I: %.2f\r\n"
+                    "throttle: %d, m0: %d, m1: %d, m2: %d, m3: %d\r\n"
+                    "P: %.2f, I: %.2f, D: %.2f\r\n"
+                    "stack wm:\r\n"
+                    "radio: %ld, sensor: %ld, tof: %ld, gps: %ld\r\n"
+                    "sd: %ld, adc: %ld, ctrl: %ld, msg: %ld\r\n"
+                    "min rm: %ld, cur rm: %ld, rec status: %d\r\n"
+                    "current tick: %ld\r\n"
+                    "gps:\r\n"
+                    "iTOW: %ld, gpsFix: %d\r\n"
+                    "ecefX: %ld, ecefY: %ld, ecefZ: %ld\r\n"
+                    "pAcc: %ld, numSV: %d\r\n",
+			              att.roll, att.pitch, att.yaw,
+                    att.roll_target, att.pitch_target, att.yaw_target,
+             		    pos.height, sensor.distance, bat.voltage, bat.current,
+                    throttle, motor[0], motor[1], motor[2], motor[3],
+                    ctrl_param.P, ctrl_param.I, ctrl_param.D,
+                    radio_wm, sensor_wm, tof_wm, gps_wm,
+                    sd_wm, adc_wm, ctrl_wm, msg_wm,
+                    min_remaining, remaining, rec_status, current_tick,
+                    gps_nav_sol_data->iTOW, gps_nav_sol_data->gpsFix,
+                    gps_nav_sol_data->ecefX, gps_nav_sol_data->ecefY,
+                    gps_nav_sol_data->ecefZ, gps_nav_sol_data->pAcc,
+                    gps_nav_sol_data->numSV);
     CDC_Transmit_FS((uint8_t *)msg, size);
-    vTaskDelay(pdMS_TO_TICKS(200));
+    vTaskDelay(pdMS_TO_TICKS(100));
 	}
 }
 /* USER CODE END 4 */

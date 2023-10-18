@@ -3,20 +3,21 @@
 
 #include "stdint.h"
 
+#define ACCEL_CALIBRATION
 #define ACCEL_CALIBRATION_PARAM
 
 #ifdef ACCEL_CALIBRATION_PARAM
-#define ACCEL_X_BIAS  0.F
-#define ACCEL_Y_BIAS  0.F
-#define ACCEL_Z_BIAS  0.F
+#define ACCEL_X_BIAS  -0.07F
+#define ACCEL_Y_BIAS  -0.026F
+#define ACCEL_Z_BIAS  -0.01F
 #define ACCEL_X_SCALE 1.F
-#define ACCEL_Y_SCALE 1.F
-#define ACCEL_Z_SCALE 1.F
+#define ACCEL_Y_SCALE 0.999F
+#define ACCEL_Z_SCALE 0.98F
 #endif
 
-#define MAG_X_BIAS    0.F
-#define MAG_Y_BIAS    0.F
-#define MAG_Z_BIAS    0.F 
+#define MAG_X_BIAS    -6.5116F
+#define MAG_Y_BIAS    20.9513F
+#define MAG_Z_BIAS    -43.9649F 
 
 #define MPU9250_AD0   0
 
