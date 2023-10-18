@@ -100,7 +100,8 @@ Core/Src/nrf24l01p.c \
 Core/Src/ahrs.c \
 Core/Src/attitude_control.c \
 $(wildcard Drivers/FatFs/Src/*.c) \
-Core/Src/sd_spi.c
+Core/Src/sd_spi.c \
+Core/Src/mpu9250.c
 
 # ASM sources
 ASM_SOURCES =  \
