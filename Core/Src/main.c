@@ -434,6 +434,9 @@ int main(void)
   else if (status == 2)
     module_init_failed(MODULE_FAILED_AK8963);
 
+  mpu9250_read_imu(&sensor.ax, &sensor.ay, &sensor.az,
+                   &sensor.gx, &sensor.gy, &sensor.gz);
+  mpu9250_read_mag(&sensor.mx, &sensor.my, &sensor.mz);
   ENU2NED(sensor.ax, sensor.ay, sensor.az);
   ahrs_init(sensor.ax, sensor.ay, sensor.az,
             sensor.mx, sensor.my, sensor.mz);
@@ -1185,7 +1188,7 @@ static void msg_task(void *param)
 
     radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
     sensor_wm = uxTaskGetStackHighWaterMark(sensor_handler);
-    tof_wm = uxTaskGetStackHighWaterMark(tof_handler);
+    // tof_wm = uxTaskGetStackHighWaterMark(tof_handler);
     gps_wm = uxTaskGetStackHighWaterMark(gps_handler);
     sd_wm = uxTaskGetStackHighWaterMark(sd_handler);
     adc_wm = uxTaskGetStackHighWaterMark(adc_handler);
@@ -1222,7 +1225,7 @@ static void msg_task(void *param)
                     gps_nav_sol_data->ecefZ, gps_nav_sol_data->pAcc,
                     gps_nav_sol_data->numSV);
     CDC_Transmit_FS((uint8_t *)msg, size);
-    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(20));
 	}
 }
 /* USER CODE END 4 */

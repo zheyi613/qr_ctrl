@@ -5,15 +5,15 @@
  * @date 2023-10-16
  */
 #include "mpu9250.h"
-#include "i2c.h"
-#include "stdio.h"
+#include "rtos_bus.h"
+#include "stm32f4xx_hal.h"
 
-#define read_reg_multi(addr, reg, pData, size)        \
-        HAL_I2C_Mem_Read(&hi2c2, addr, reg, I2C_MEMADD_SIZE_8BIT, \
-                         pData, size, 10)
-#define write_reg_multi(addr, reg, pData, size)       \
-        HAL_I2C_Mem_Write(&hi2c2, addr, reg, I2C_MEMADD_SIZE_8BIT, \
-                          pData, size, 10)
+#define read_reg_multi(addr, reg, pData, size)               \
+        i2c_read_multi_dma(&hi2c2, addr, reg, I2C_REG_8BIT,  \
+                           pData, size)
+#define write_reg_multi(addr, reg, pData, size)              \
+        i2c_write_multi_dma(&hi2c2, addr, reg, I2C_REG_8BIT, \
+                            pData, size)
 #define delay_ms(val)   HAL_Delay(val)
 
 /* MPU9250 address is 110100 for ADO = 0 and 110101 for ADO = 1 */
