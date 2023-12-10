@@ -80,6 +80,9 @@ struct rec_att {
         float roll;
         float pitch;
         float yaw;
+        float r_sp;
+        float p_sp;
+        float y_sp;
 };
 
 struct rec_ctrl {
@@ -87,6 +90,9 @@ struct rec_ctrl {
         uint32_t tick;
         uint32_t throttle;
         uint16_t motor[4];
+        float ex;
+        float ey;
+        float ez;
 };
 
 
