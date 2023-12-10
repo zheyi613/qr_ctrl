@@ -9,18 +9,24 @@
 
 #include <stdio.h>
 
+/* Mission mode */
+#define NORMAL_MODE                0
+#define TEST_PROPORTION_FAULT_MODE 1
+
 /* Payload definition */
 struct payload {
         uint16_t throttle;
-        int16_t roll_target;    /* +-180deg/32768 LSB */
-        int16_t pitch_target;
-        int16_t yaw_target;
-        uint16_t height_target; /* 0.01 mm LSB */
-        uint8_t P;              /* 0.05 LSB */
-        uint8_t I;
-        uint8_t D;
+        int16_t sp_roll;    /* +-180deg/32768 LSB */
+        int16_t sp_pitch;
+        int16_t sp_yaw_rate;
+        uint16_t sp_height; /* 0.01 mm LSB */
+        uint8_t P;          /* 0.025 LSB */
+        uint8_t I;          /* 0.025 LSB */
+        uint8_t D;          /* 1 LSB */
         uint8_t mode;
-        uint8_t dummy[18];
+        uint8_t fault_ratio;
+        uint8_t motor_bias[4];
+        uint8_t dummy[13];
 };
 #define PAYLOAD_WIDTH           sizeof(struct payload)
 
@@ -45,9 +51,12 @@ struct ack_payload {
 #define DECODING_HEIGHT         0.01F
 #define DECODING_VOLTAGE        0.1F
 #define DECODING_CURRENT        0.1F
-#define DECODING_CTRL_GAIN      0.05F
+#define DECODING_CTRL_PI_GAIN   0.025F
+#define DECODING_FAULT_RATIO    0.1F
 
 #define DECODE_PAYLOAD_THROTTLE(src, dst)       \
+        dst = (src)
+#define DECODE_PAYLOAD_MOTOR(src, dst)          \
         dst = (src)
 #define DECODE_PAYLOAD_RADIUS(src, dst)         \
         dst = (float)(src) * DECODING_RADIUS
@@ -65,10 +74,14 @@ struct ack_payload {
         dst = (src)
 #define DECODE_PAYLOAD_GPS_PACC(src, dst)       \
         dst = (src)
-#define DECODE_PAYLOAD_CTRL_GAIN(src, dst)      \
-        dst = (float)(src) * DECODING_CTRL_GAIN
-#define DECODE_PAYLOAD_CTRL_MODE(src, dst)      \
+#define DECODE_PAYLOAD_CTRL_PI_GAIN(src, dst)   \
+        dst = (float)(src) * DECODING_CTRL_PI_GAIN
+#define DECODE_PAYLOAD_CTRL_D_GAIN(src, dst)    \
+        dst = (float)src
+#define DECODE_PAYLOAD_MODE(src, dst)      \
         dst = (src)
+#define DECODE_PAYLOAD_FAULT_RATIO(src, dst)    \
+        dst = (float)(src) * DECODING_FAULT_RATIO
 
 /* Encode for payload */
 #define ENCODING_RADIUS         10430.378F
@@ -76,7 +89,8 @@ struct ack_payload {
 #define ENCODING_HEIGHT         100.F
 #define ENCODING_VOLTAGE        10.F
 #define ENCODING_CURRENT        10.F
-#define ENCODING_CTRL_GAIN      20.F
+#define ENCODING_CTRL_PI_GAIN   40.F
+#define ENCODING_FAULT_RATIO    10.F
 
 #define ENCODE_PAYLOAD_THROTTLE(src, dst)       \
         dst = (uint16_t)(src)
@@ -110,9 +124,13 @@ struct ack_payload {
                 else                            \
                         dst = (uint16_t)(src);  \
         } while (0)
-#define ENCODE_PAYLOAD_CTRL_GAIN(src, dst)      \
-        dst = (uint8_t)(src * ENCODING_CTRL_GAIN)
+#define ENCODE_PAYLOAD_CTRL_PI_GAIN(src, dst)   \
+        dst = (uint8_t)(src * ENCODING_CTRL_PI_GAIN)
+#define ENCODE_PAYLOAD_CTRL_D_GAIN(src, dst)    \
+        dst = (uint8_t)src
 #define ENCODE_PAYLOAD_MODE(src, dst)           \
         dst = (uint8_t)(src)
+#define ENCODE_PAYLOAD_FAULT_RATIO(src, dst)    \
+        dst = (uint8_t)(src * ENCODING_FAULT_RATIO)
 
 #endif /* NRF_PAYLOAD_H */

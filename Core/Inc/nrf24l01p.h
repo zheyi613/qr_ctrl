@@ -69,5 +69,6 @@ int nrf24l01p_tx_irq(void);
 #endif
 
 void nrf24l01p_start_rx(void);
+void nrf24l01p_reset_buffer(void);
 
 #endif /* NRF24L01P_H */

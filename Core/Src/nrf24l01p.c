@@ -141,7 +141,7 @@ static inline void write_reg(uint8_t reg, uint8_t val)
         write_reg_multi(reg, &val, 1);
 }
 
-#define get_rx_payload_width(p_width)                  \
+#define get_rx_payload_width(p_width)           \
         read_multi(NRF24L01P_CMD_R_RX_PL_WID, p_width, 1)
 
 #define read_rx_payload(payload, width)         \
@@ -149,6 +149,9 @@ static inline void write_reg(uint8_t reg, uint8_t val)
 
 #define write_tx_payload(payload, width)        \
         write_multi(NRF24L01P_CMD_W_TX_PAYLOAD, payload, width)
+
+#define get_fifo_status()                       \
+        read_reg(NRF24L01P_REG_FIFO_STATUS)
 
 static inline void power_up(void)
 {
@@ -298,20 +301,27 @@ void nrf24l01p_start_rx(void)
  */
 void nrf24l01p_receive(uint8_t *payload)
 {
+        uint8_t status;
 #ifdef NRF24L01P_ACK_PAYLOAD
         uint8_t width;
 
         get_rx_payload_width(&width);
         read_rx_payload(payload, width);
-        /* Clear RX_DR and TX_DS interrupt bit to reset IRQ pin */
-        write_reg(NRF24L01P_REG_STATUS, 0x60);
 #else
-        uint8_t status = get_status();
-     
+        status = get_status();
         if (!(status & 0x40))
                 return;
 
         read_rx_payload(payload, NRF24L01P_PAYLOAD_WIDTH);
+#endif
+        /* Clear remaining data in RX FIFO */
+        status = get_status();
+        if (!((status & 0x0E) == 0x0E))
+                flush_rx_fifo();
+#ifdef NRF24L01P_ACK_PAYLOAD
+        /* Clear RX_DR and TX_DS interrupt bit to reset IRQ pin */
+        write_reg(NRF24L01P_REG_STATUS, 0x60);
+#else
         /* Clear RX_DR interrupt bit to reset IRQ pin */
         write_reg(NRF24L01P_REG_STATUS, 0x40);
 #endif
@@ -323,7 +333,11 @@ void nrf24l01p_transmit(uint8_t *payload, uint8_t width)
 void nrf24l01p_transmit(uint8_t *payload)
 #endif
 {
-        flush_tx_fifo();
+        uint8_t fifo_status = get_fifo_status();
+
+        /* Check tx fifo is empty */
+        if (!(fifo_status & 0x01))
+                flush_tx_fifo();
 
 #ifdef NRF24L01P_ACK_PAYLOAD
         write_tx_payload(payload, width);
@@ -347,18 +361,20 @@ int nrf24l01p_tx_irq(void)
 #endif
 {
         uint8_t status = get_status();
-        /* Clear TX_DS and MAX_RT interrupt bit */
-        write_reg(NRF24L01P_REG_STATUS, status);
-
-        if (!(status & 0x20))
-                return 1;
-
 #ifdef NRF24L01P_ACK_PAYLOAD
-        uint8_t width;
-        get_rx_payload_width(&width);
-        read_rx_payload(payload, width);
+        if (status & 0x20) {
+                uint8_t width;
+                get_rx_payload_width(&width);
+                read_rx_payload(payload, width);
+                status = get_status();
+        }
+        if (!((status & 0x0E) == 0x0E))
+                flush_rx_fifo();
 #endif
-        return 0;
+        /* Clear RX_DR/TX_DS/MAX_RT interrupt bit */
+        write_reg(NRF24L01P_REG_STATUS, 0x70);
+
+        return ((status & 0x10) == 0x10);
 }
 
 #ifdef NRF24L01P_ACK_PAYLOAD
@@ -383,3 +399,9 @@ void nrf24l01p_write_ack_payload(uint8_t *payload, uint8_t width)
         write_multi(NRF24L01P_CMD_W_ACK_PAYLOAD, payload, width);
 }
 #endif
+
+void nrf24l01p_reset_buffer(void)
+{
+        flush_rx_fifo();
+        flush_tx_fifo();
+}
