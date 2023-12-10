@@ -5,19 +5,33 @@
 
 #define ACCEL_CALIBRATION
 #define ACCEL_CALIBRATION_PARAM
+// #define GYRO_CALIBRATION_PARAM
+#define MAG_NED2ENU
 
 #ifdef ACCEL_CALIBRATION_PARAM
-#define ACCEL_X_BIAS  -0.07F
-#define ACCEL_Y_BIAS  -0.026F
-#define ACCEL_Z_BIAS  -0.01F
-#define ACCEL_X_SCALE 1.F
-#define ACCEL_Y_SCALE 0.999F
-#define ACCEL_Z_SCALE 0.98F
+// #define ACCEL_X_BIAS  -0.1047F
+// #define ACCEL_Y_BIAS  -0.0295F
+// #define ACCEL_Z_BIAS  -0.0115F
+#define ACCEL_X_BIAS  -0.0665F
+#define ACCEL_Y_BIAS  -0.0210F
+#define ACCEL_Z_BIAS  -0.0175F
+#define ACCEL_X_SCALE 1.0035F
+#define ACCEL_Y_SCALE 1.0030F
+#define ACCEL_Z_SCALE 0.9828F
 #endif
 
-#define MAG_X_BIAS    -6.5116F
-#define MAG_Y_BIAS    20.9513F
-#define MAG_Z_BIAS    -43.9649F 
+#ifdef GYRO_CALIBRATION_PARAM
+#define GYRO_X_BIAS   8.9047F
+#define GYRO_Y_BIAS   1.1565F
+#define GYRO_Z_BIAS   1.6790F
+#endif
+
+#define MAG_X_BIAS    -9.9499F
+#define MAG_Y_BIAS    21.5623F
+#define MAG_Z_BIAS    -54.9708F
+#define MAG_X_SCALE   0.9882F
+#define MAG_Y_SCALE   1.0219F
+#define MAG_Z_SCALE   0.9903F
 
 #define MPU9250_AD0   0
 

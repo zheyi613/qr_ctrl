@@ -19,18 +19,18 @@ static float qb0, qb1, qb2, qb3;
 
 static void set_eulerXYbias(void)
 {
-        float half_roll = ROLL_BIAS * 0.5f;
-        float half_pitch = PITCH_BIAS * 0.5f;
+        float half_roll = -ROLL_BIAS * 0.5f;
+        float half_pitch = -PITCH_BIAS * 0.5f;
         
         qb0 = cosf(half_roll) * cosf(half_pitch);
 #ifdef NED_FRAME
-        qb1 = -sinf(half_roll) * sinf(half_pitch);
-        qb2 = sinf(half_pitch) * cosf(half_roll);
-        qb3 = sinf(half_roll) * cosf(half_pitch);
+        qb1 = sinf(half_roll) * cosf(half_pitch);
+        qb2 = cosf(half_roll) * sinf(half_pitch);
+        qb3 = -sinf(half_roll) * sinf(half_pitch);
 #else
-        qb1 = sinf(half_pitch) * cosf(half_roll);
-        qb2 = sinf(half_roll) * sinf(half_pitch);
-        qb3 = sinf(half_roll) * cosf(half_pitch);
+        qb1 = -sinf(half_pitch) * cosf(half_roll);
+        qb2 = cosf(half_pitch) * sinf(half_roll);
+        qb3 = -sinf(half_pitch) * sinf(half_roll);
 #endif
 }
 #endif
@@ -154,39 +154,93 @@ static void cross_vec2quat(float ax, float ay, float az,
  * @param my 
  * @param mz 
  */
+// void ahrs_init(float ax, float ay, float az,
+//                float mx, float my, float mz)
+// {
+//         float y_x, y_y, y_z;
+//         float by_x, by_y, by_z;
+//         float qz0, qz1, qz2, qz3;
+//         float qy0, qy1, qy2, qy3;
+// #ifdef NED_FRAME
+//         ax = -ax;
+//         ay = -ay;
+//         az = -az;
+// #endif
+//         /* normalize measurement data */
+//         normalize_vec(&ax, &ay, &az);
+//         normalize_vec(&mx, &my, &mz);
+//         /* get rotation of world z to body z */
+//         cross_vec2quat(ax, ay, az, 0, 0, 1, &qz0, &qz1, &qz2, &qz3);
+//         /* rotate body (NED: y/ENU: x) to make world z coincide with body z */
+//         by_x = 2.f * (qz1 * qz2 + qz0 * qz3);
+//         by_y = 2.f * (0.5f - qz1 * qz1 + qz3 * qz3);
+//         by_z = 2.f * (qz2 * qz3 - qz0 * qz1);
+//         /* acceleration (wz) cross magnetic field to get world 
+//          * (NED: y/ENU: x) */
+//         cross_vec(ax, ay, az, mx, my, mz, &y_x, &y_y, &y_z);
+//         normalize_vec(&y_x, &y_y, &y_z);
+//         /* compute quaternion between world y and body y */
+//         cross_vec2quat(y_x, y_y, y_z, by_x, by_y, by_z,
+//                        &qy0, &qy1, &qy2, &qy3);
+//         /* product two quaternion */
+//         q0 = qz0 * qy0 - qz1 * qy1 - qz2 * qy2 - qz3 * qy3;
+//         q1 = qz1 * qy0 + qz0 * qy1 - qz3 * qy2 + qz2 * qy3;
+//         q2 = qz2 * qy0 + qz3 * qy1 + qz0 * qy2 - qz1 * qy3;
+//         q3 = qz3 * qy0 - qz2 * qy1 + qz1 * qy2 + qz0 * qy3;
+//         /* normalize quaternion */
+//         normalize_quat(&q0, &q1, &q2, &q3);
+// #if defined(ROLL_BIAS) && defined(PITCH_BIAS)
+//         set_eulerXYbias();
+// #endif
+// }
+
 void ahrs_init(float ax, float ay, float az,
                float mx, float my, float mz)
 {
-        float y_x, y_y, y_z;
-        float by_x, by_y, by_z;
         float qz0, qz1, qz2, qz3;
-        float qy0, qy1, qy2, qy3;
+        float qx0, qx1, qx2, qx3;
+        float byx, byy, byz;
+        float cx, cy, cz;
+
+        /* normalize measurement data */
+        normalize_vec(&ax, &ay, &az);
+        normalize_vec(&mx, &my, &mz);
 #ifdef NED_FRAME
         ax = -ax;
         ay = -ay;
         az = -az;
 #endif
-        /* normalize measurement data */
-        normalize_vec(&ax, &ay, &az);
-        normalize_vec(&mx, &my, &mz);
-        /* get rotation of world z to body z */
-        cross_vec2quat(ax, ay, az, 0, 0, 1, &qz0, &qz1, &qz2, &qz3);
-        /* rotate body y to make world z coincide with body z */
-        by_x = 2.f * (qz1 * qz2 + qz0 * qz3);
-        by_y = 2.f * (0.5f - qz1 * qz1 + qz3 * qz3);
-        by_z = 2.f * (qz2 * qz3 - qz0 * qz1);
-        /* acceleration (wz) cross magnetic field to get world y */
-        cross_vec(ax, ay, az, mx, my, mz, &y_x, &y_y, &y_z);
-        normalize_vec(&y_x, &y_y, &y_z);
-        /* compute quaternion between world y and body y */
-        cross_vec2quat(y_x, y_y, y_z, by_x, by_y, by_z,
-                       &qy0, &qy1, &qy2, &qy3);
-        /* product two quaternion */
-        q0 = qz0 * qy0 - qz1 * qy1 - qz2 * qy2 - qz3 * qy3;
-        q1 = qz1 * qy0 + qz0 * qy1 - qz3 * qy2 + qz2 * qy3;
-        q2 = qz2 * qy0 + qz3 * qy1 + qz0 * qy2 - qz1 * qy3;
-        q3 = qz3 * qy0 - qz2 * qy1 + qz1 * qy2 + qz0 * qy3;
-        /* normalize quaternion */
+        /* Compute rotation from body z to world z */
+        cross_vec2quat(0, 0, 1, ax, ay, az, &qz0, &qz1, &qz2, &qz3);
+        
+        /* Compute cross vector between world z and world (NED:x / ENU:y) */
+        cross_vec(ax, ay, az, mx, my, mz, &cx, &cy, &cz);
+        normalize_vec(&cx, &cy, &cz);
+
+        /* Get vector of body (NED:y / ENU:x) after rotating from bz to wz */
+#ifdef NED_FRAME
+        byx = 2.f * (qz1 * qz2 - qz0 * qz3);
+        byy = 1.f - 2.f * (qz1 * qz1 + qz3 * qz3);
+        byz = 2.f * (qz2 * qz3 + qz0 * qz1);
+#else
+        byx = 1.f - 2.f * (qz2 * qz2 + qz3 * qz3);
+        byy = 2.f * (qz1 * qz2 + qz0 * qz3);
+        byz = 2.f * (qz1 * qz3 - qz0 * qz2);
+#endif
+        /* Compute rotation from body (NED:y / ENU: x) to world y */
+        cross_vec2quat(byx, byy, byz, cx, cy, cz, &qx0, &qx1, &qx2, &qx3);
+
+        /* Multiply two rotation */
+        q0 = qz0 * qx0 - qz1 * qx1 - qz2 * qx2 - qz3 * qx3;
+        q1 = qz1 * qx0 + qz0 * qx1 - qz3 * qx2 + qz2 * qx3;
+        q2 = qz2 * qx0 + qz3 * qx1 + qz0 * qx2 - qz1 * qx3;
+        q3 = qz3 * qx0 - qz2 * qx1 + qz1 * qx2 + qz0 * qx3;
+        
+        /* Inverse rotation to get rotation from world frame to body frame */
+        q1 = -q1;
+        q2 = -q2;
+        q3 = -q3;
+
         normalize_quat(&q0, &q1, &q2, &q3);
 #if defined(ROLL_BIAS) && defined(PITCH_BIAS)
         set_eulerXYbias();
@@ -236,71 +290,71 @@ void ahrs_update(float gx, float gy, float gz,
                 float mx, float my, float mz,
                 float dt)
 {
-        // float hx, hy, bx, bz;
         float halfvx, halfvy, halfvz, halfwx, halfwy, halfwz;
         float halfex, halfey, halfez;
-        // auxiliary variables to reduce number of repeated operations
+        float vx, vy, vz;
+        float dot, proj_x, proj_y, proj_z;
+        /* auxiliary variables to reduce number of repeated operations */
         float q0q0 = q0*q0;
         float q0q1 = q0*q1;
         float q0q2 = q0*q2;
         float q0q3 = q0*q3;
-        // float q1q1 = q1*q1;
+#ifdef NED_FRAME
+        float q1q1 = q1*q1;
+#endif
         float q1q2 = q1*q2;
         float q1q3 = q1*q3;
+#ifndef NED_FRAME
         float q2q2 = q2*q2;
+#endif
         float q2q3 = q2*q3;
         float q3q3 = q3*q3;
         float qa = q0, qb = q1, qc = q2;
 
-        // normalise the measurements
-        normalize_vec(&ax, &ay, &az);
-        normalize_vec(&mx, &my, &mz);
-        // compute reference direction of magnetic field
-        // hx = 2.0f * (mx * (0.5f - q2q2 - q3q3) + my * (q1q2 - q0q3) +
-        //              mz * (q1q3 + q0q2));
-        // hy = 2.0f * (mx * (q1q2 + q0q3) + my * (0.5f - q1q1 - q3q3) +
-        //              mz * (q2q3 - q0q1));
-        // bx = sqrtf((hx * hx) + (hy * hy)); // assume by = 0
-        // bz = 2.0f * (mx * (q1q3 - q0q2) + my * (q2q3 + q0q1) +
-        //              mz * (0.5f - q1q1 - q2q2));
-        // estimated direction of gravity and magnetic field (v and w)
+        /* Estimated world z (v) in body frame */
         halfvx = q1q3 - q0q2;
         halfvy = q0q1 + q2q3;
-        halfvz = q0q0 - 0.5f + q3q3;
+        halfvz = q0q0 + q3q3 - 0.5f;
 #ifdef NED_FRAME       /* gravity: (0, 0, -1) */ 
         halfvx = -halfvx;
         halfvy = -halfvy;
         halfvz = -halfvz;
 #endif
-        // halfwx = bx * (0.5 - q2q2 - q3q3) + bz * (q1q3 - q0q2);
-        // halfwy = bx * (q1q2 - q0q3) + bz * (q0q1 + q2q3);
-        // halfwz = bx * (q0q2 + q1q3) + bz * (0.5 - q1q1 - q2q2);
-        halfwx = 0.5 - q2q2 - q3q3;
+        normalize_vec(&ax, &ay, &az);
+        normalize_vec(&mx, &my, &mz);
+
+        /* Estimated direction of magnetic field (w) */
+#ifdef NED_FRAME
+        halfwx = q0q0 + q1q1 - 0.5f;
         halfwy = q1q2 - q0q3;
         halfwz = q1q3 + q0q2;
-        float vx = halfvx * 2.f, vy = halfvy * 2.f, vz = halfvz * 2.f;
-        float dot = dot_vec(vx, vy, vz, mx, my, mz);
-        float proj_x = mx - dot * vx;
-        float proj_y = my - dot * vy;
-        float proj_z = mz - dot * vz;
+#else
+        halfwx = q1q2 + q0q3;
+        halfwy = q0q0 + q2q2 - 0.5f;
+        halfwz = q2q3 - q0q1;
+#endif
+        vx = halfvx * 2.f;
+        vy = halfvy * 2.f;
+        vz = halfvz * 2.f;
+        dot = dot_vec(vx, vy, vz, mx, my, mz);
+        proj_x = mx - dot * vx;
+        proj_y = my - dot * vy;
+        proj_z = mz - dot * vz;
         normalize_vec(&proj_x, &proj_y, &proj_z);
-        // error is sum of cross product between reference direction of fields
-        // and direction measured by sensors
-        // halfex = (ay * halfvz - az * halfvy) + (my * halfwz - mz * halfwy);
-        // halfey = (az * halfvx - ax * halfvz) + (mz * halfwx - mx * halfwz);
-        // halfez = (ax * halfvy - ay * halfvx) + (mx * halfwy - my * halfwx);
+        /* Error is sum of cross product between reference direction of fields
+         * and direction measured by sensors */
         halfex = (ay * halfvz - az * halfvy) + (proj_y * halfwz - proj_z * halfwy);
         halfey = (az * halfvx - ax * halfvz) + (proj_z * halfwx - proj_x * halfwz);
         halfez = (ax * halfvy - ay * halfvx) + (proj_x * halfwy - proj_y * halfwx);
-        // integral error scaled integral gain
+        /* Integral error scaled integral gain */
         ex_int += halfex * DOUBLE_KI * dt;
         ey_int += halfey * DOUBLE_KI * dt;
         ez_int += halfez * DOUBLE_KI * dt;
-        // adjusted gyroscope measurements
+        /* Adjusted gyroscope measurements */
         gx += DOUBLE_KP * halfex + ex_int;
         gy += DOUBLE_KP * halfey + ey_int;
         gz += DOUBLE_KP * halfez + ez_int;
-        // integrate quaternion rate and normalize (1st-order Rouge-Kutta)
+        /* integrate quaternion rate and normalize (1st-order Rouge-Kutta) */
         gx *= (0.5f * dt);
         gy *= (0.5f * dt);
         gz *= (0.5f * dt);
@@ -308,7 +362,7 @@ void ahrs_update(float gx, float gy, float gz,
         q1 += (qa * gx + qc * gz - q3 * gy);
         q2 += (qa * gy - qb * gz + q3 * gx);
         q3 += (qa * gz + qb * gy - qc * gx);
-        // normalise quaternion
+        /* normalise quaternion */
         normalize_quat(&q0, &q1, &q2, &q3);
 }
 

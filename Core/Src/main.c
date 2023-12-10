@@ -56,7 +56,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-/* Configure tasks to enable */
+/* Enable/Disable tasks */
 #define RADIO_TASK
 #define SENSOR_TASK
 // #define TOF_TASK
@@ -80,6 +80,7 @@ enum module_init_failed_id {
 
 #define VL53L1X_ADDR        0x52
 
+#define CTRL_FREQ           100
 #define MOTOR_DUTY_RANGE    2000 /* esc standard: 1-2ms, pwm arr: 2000-3999 */
 #define MOTOR_CTRL_RANGE    MOTOR_DUTY_RANGE * 0.2
 #define MOTOR_INITIAL_DUTY  0  /* max: 1999, must more than zero to lock ESC */
@@ -87,11 +88,6 @@ enum module_init_failed_id {
 
 #define MIN_THRUST          0.35F
 #define MAX_THRUST          7.0F
-
-enum {
-  NORMAL_MODE,
-  ALTITUDE_MODE
-};
 
 #define TIME_PER_TICK       0.002F
 
@@ -181,15 +177,15 @@ struct attitude {
   float roll;
   float pitch;
   float yaw;
-  float roll_target;
-  float pitch_target;
-  float yaw_target;
+  float sp_roll;
+  float sp_pitch;
+  float sp_yaw;
 } att;
 
 struct position {
   float distance;
   float height;
-  float height_target;
+  float sp_height;
 } pos;
 
 struct battery {
@@ -206,6 +202,11 @@ struct ctrl_parameter {
   float D;
   uint8_t mode;
 } ctrl_param;
+
+float fault_ratio;
+int motor_fault_id;
+
+uint8_t motor_bias[4];
 
 /* Variable of sd spi timer (ms) */
 WORD Timer1, Timer2;
@@ -351,6 +352,9 @@ int main(void)
   memset(&ack_pl, 0, ACK_PAYLOAD_WIDTH);
   memset(&ctrl_param, 0, sizeof(struct ctrl_parameter));
   memset(gps_buffer, 0, 2 * GPS_BUFFER_SIZE);
+  fault_ratio = 0;
+  motor_fault_id = 0;
+  memset(motor_bias, 0, sizeof(motor_bias));
 
 	#ifdef ESC_CALIBRATION
   __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, MOTOR_DUTY_RANGE + 1999);
@@ -438,11 +442,12 @@ int main(void)
                    &sensor.gx, &sensor.gy, &sensor.gz);
   mpu9250_read_mag(&sensor.mx, &sensor.my, &sensor.mz);
   ENU2NED(sensor.ax, sensor.ay, sensor.az);
+  ENU2NED(sensor.mx, sensor.my, sensor.mz);
   ahrs_init(sensor.ax, sensor.ay, sensor.az,
             sensor.mx, sensor.my, sensor.mz);
   // ahrs_init_imu(sensor.ax, sensor.ay, sensor.az);
   ahrs2euler(&att.roll, &att.pitch, &att.yaw);
-  att.yaw_target = att.yaw;
+  att.sp_yaw = att.yaw;
 #endif
 
   set_bus_mode(BUS_INTERRUPT_MODE); /* set bus to non blocking mode */
@@ -471,7 +476,7 @@ int main(void)
 	configASSERT(status == pdPASS);
 #endif
 #ifdef SENSOR_TASK
-  status = xTaskCreate(sensor_task, "sensor_task", 300, NULL, 4, &sensor_handler);
+  status = xTaskCreate(sensor_task, "sensor_task", 500, NULL, 4, &sensor_handler);
   configASSERT(status == pdPASS);
 #endif
 #ifdef TOF_TASK
@@ -493,7 +498,7 @@ int main(void)
 	configASSERT(status == pdPASS);
 #endif
 #ifdef CTRL_TASK
-	status = xTaskCreate(ctrl_task, "ctrl_task", 400, NULL, 2, &ctrl_handler);
+	status = xTaskCreate(ctrl_task, "ctrl_task", 500, NULL, 2, &ctrl_handler);
   configASSERT(status == pdPASS);
 #endif
 #ifdef MSG_TASK
@@ -624,7 +629,7 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
   if (hspi->Instance == hspi2.Instance) {
-      vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
+    vTaskNotifyGiveFromISR(radio_handler, &xHigherPriorityTaskWoken);
   }
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
@@ -683,6 +688,8 @@ void USART2_IRQHandler(void)
 static void radio_task(void *param)
 {
   uint8_t start_flag = 1;
+  uint8_t disconnect_count = 0;
+  int32_t tmp;
   float yaw_input = 0.f;
 
   while (1) {
@@ -690,25 +697,42 @@ static void radio_task(void *param)
       nrf24l01p_start_rx();
       start_flag = 0;
     }
-    ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
-    vTaskDelay(pdMS_TO_TICKS(2));
-    nrf24l01p_receive((uint8_t *)&pl);
-    nrf24l01p_write_ack_payload((uint8_t *)&ack_pl, ACK_PAYLOAD_WIDTH);
-    /* decode payload */
-    if (pl.throttle < MAX_THROTTLE && pl.throttle >= 0)
-      DECODE_PAYLOAD_THROTTLE(pl.throttle, throttle);
-    DECODE_PAYLOAD_RADIUS(pl.roll_target, att.roll_target);
-    DECODE_PAYLOAD_RADIUS(pl.pitch_target, att.pitch_target);
-    /* Yaw input need to higher than 0.1 deg */
-    if (pl.yaw_target > 18 || pl.yaw_target < -18) {
-      DECODE_PAYLOAD_RADIUS(pl.yaw_target, yaw_input);
-      att.yaw_target += yaw_input;
+    /* If lost connected 1 sec, landing by minus 100 throttle every 500 ms */
+    if (disconnect_count > 10) {
+      tmp = (int32_t)throttle;
+      tmp -= 100;
+      if (tmp < 0)
+        throttle = 0;
+      else
+        throttle = tmp;
+      att.sp_roll = 0;
+      att.sp_pitch = 0;
+      vTaskDelay(pdMS_TO_TICKS(500));
+    } else if (ulTaskNotifyTake(pdFALSE, pdMS_TO_TICKS(100)) != 0) {
+      vTaskDelay(pdMS_TO_TICKS(2));
+      nrf24l01p_receive((uint8_t *)&pl);
+      nrf24l01p_write_ack_payload((uint8_t *)&ack_pl, ACK_PAYLOAD_WIDTH);
+      /* decode payload */
+      if (pl.throttle < MAX_THROTTLE && pl.throttle >= 0)
+        DECODE_PAYLOAD_THROTTLE(pl.throttle, throttle);
+      DECODE_PAYLOAD_RADIUS(pl.sp_roll, att.sp_roll);
+      DECODE_PAYLOAD_RADIUS(pl.sp_pitch, att.sp_pitch);
+      /* Yaw input need to higher than 0.1 deg */
+      if (pl.sp_yaw_rate > 18 || pl.sp_yaw_rate < -18) {
+        DECODE_PAYLOAD_RADIUS(pl.sp_yaw_rate, yaw_input);
+        att.sp_yaw += yaw_input;
+      }
+      DECODE_PAYLOAD_HEIGHT(pl.sp_height, pos.sp_height);
+      DECODE_PAYLOAD_CTRL_PI_GAIN(pl.P, ctrl_param.P);
+      DECODE_PAYLOAD_CTRL_PI_GAIN(pl.I, ctrl_param.I);
+      DECODE_PAYLOAD_CTRL_D_GAIN(pl.D, ctrl_param.D);
+      DECODE_PAYLOAD_MODE(pl.mode, ctrl_param.mode);
+      DECODE_PAYLOAD_FAULT_RATIO(pl.fault_ratio, fault_ratio);
+      memcpy(motor_bias, pl.motor_bias, sizeof(motor_bias));
+      disconnect_count = 0;
+    } else {
+      disconnect_count++;
     }
-    DECODE_PAYLOAD_HEIGHT(pl.height_target, pos.height_target);
-    DECODE_PAYLOAD_CTRL_GAIN(pl.P, ctrl_param.P);
-    DECODE_PAYLOAD_CTRL_GAIN(pl.I, ctrl_param.I);
-    DECODE_PAYLOAD_CTRL_GAIN(pl.D, ctrl_param.D);
-    DECODE_PAYLOAD_CTRL_MODE(pl.mode, ctrl_param.mode);
   }
 }
 
@@ -764,6 +788,26 @@ void rec_data(void *data)
   }
 }
 
+/* x[order + 1], y[order + 1]
+ * y[0] = x[0] * num[0] + x[1] * num[1] + ...
+ *       -y[1] * den[1] - y[2] * den[2]
+ */
+void IIR_filter(int order, float *num, float *den, float *x, float *y)
+{
+  int i;
+
+  for (i = order; i > 0; i--) {
+    y[i] = y[i - 1];
+  }
+  y[0] = num[0] * x[0];
+  for (i = 1; i <= order; i++) {
+    y[0] += num[i] * x[i] - den[i] * y[i];
+  }
+  for (i = order; i > 0; i--) {
+    x[i] = x[i - 1];
+  }
+}
+
 static void sensor_task(void *param)
 {
   TickType_t mag_tick = 0, baro_tick = 0;
@@ -771,7 +815,7 @@ static void sensor_task(void *param)
   float ax, ay, az, gx, gy, gz;
   float mx, my, mz, mag_square;
   float press, temp;
-  uint8_t mag_err = 1;
+  uint8_t mag_ready = 0;
   struct rec_imu imu_data = {
     REC_MARK_IMU, 0, 0, 0, 0, 0, 0, 0,
   };
@@ -782,47 +826,62 @@ static void sensor_task(void *param)
     REC_MARK_BARO, 0, 0, 0, 0
   };
   struct rec_att att_data = {
-    REC_MARK_ATT, 0, 0, 0
+    REC_MARK_ATT, 0, 0, 0, 0, 0, 0
   };
+  float acc_lowpass_num[] = {5.810453E-4F, 2.324181E-3F, 3.486272E-3F,
+                             2.324181E-3F, 5.810453E-4F};
+  float acc_lowpass_den[] = {1, -3.102466F, 3.688699F, -1.981535F, 0.404599F};
+  float ax_X[5] = {0}, ay_X[5] = {0}, az_X[5] = {0};
+  float ax_Y[5] = {0}, ay_Y[5] = {0}, az_Y[5] = {0};
 
   while (1) {
     current_tick = xTaskGetTickCount();
     if (!mpu9250_read_imu(&ax, &ay, &az, &gx, &gy, &gz)) {
+      ENU2NED(gx, gy, gz);
+      ENU2NED(ax, ay, az);
       gx *= DEG2RAD;
       gy *= DEG2RAD;
-      gz *= DEG2RAD;
-      ENU2NED(gx, gy, gz);
-      ENU2NED(ax, ay, az);     
-      sensor.ax = ax;
-      sensor.ay = ay;
-      sensor.az = az;
+      gz *= DEG2RAD;    
+      // sensor.ax = ax;
+      // sensor.ay = ay;
+      // sensor.az = az;
       sensor.gx = gx;
       sensor.gy = gy;
       sensor.gz = gz;
+      ax_X[0] = ax;
+      ay_X[0] = ay;
+      az_X[0] = az;
+      IIR_filter(4, acc_lowpass_num, acc_lowpass_den, ax_X, ax_Y);
+      IIR_filter(4, acc_lowpass_num, acc_lowpass_den, ay_X, ay_Y);
+      IIR_filter(4, acc_lowpass_num, acc_lowpass_den, az_X, az_Y);
+      ax = ax_Y[0];
+      ay = ay_Y[0];
+      az = az_Y[0];
+      sensor.ax = ax;
+      sensor.ay = ay;
+      sensor.az = az;
 #ifdef REC_IMU
       memcpy(&imu_data.ax, &sensor.ax, 24);
       rec_data(&imu_data);
 #endif
     }
     if (mag_tick == pdMS_TO_TICKS(10)) {
+      mag_ready = 0;
       if (!mpu9250_read_mag(&mx, &my, &mz)) {
         mag_square = mx * mx + my * my + mz * mz;
         /* check if disturbed or not by square */
-        /* 25 uT < norm(mag) < 65 uT */
-        if (mag_square > 625.f && mag_square < 4225.f) {
+        /* 25 uT < norm(mag) < 70 uT */
+        if ((mag_square > 625.f) && (mag_square < 4900.f)) {
+          ENU2NED(mx, my, mz);
           sensor.mx = mx;
           sensor.my = my;
           sensor.mz = mz;
-          mag_err = 0;
 #ifdef REC_MAG
           memcpy(&mag_data.mx, &sensor.mx, 12);
           rec_data(&mag_data);
 #endif
-        } else {
-          mag_err = 1;
+          mag_ready = 1;
         }
-      } else {
-        mag_err = 1;
       }
       mag_tick = 0;
     }
@@ -843,14 +902,14 @@ static void sensor_task(void *param)
     mag_tick++;
     baro_tick++;
     /* Update attitude */
-    if (!mag_err)
+    if (mag_ready)
       ahrs_update(gx, gy, gz, ax, ay, az, mx, my, mz, dt);
     else
       ahrs_update_imu(gx, gy, gz, ax, ay, az, dt);
     ahrs2euler(&att.roll, &att.pitch, &att.yaw);
     ahrs2quat(att.q);
 #ifdef REC_ATT
-    memcpy(&att_data.roll, &att.roll, 12);
+    memcpy(&att_data.roll, &att.roll, 24);
     rec_data(&att_data);
 #endif
     vTaskDelay(pdMS_TO_TICKS(2));
@@ -1035,23 +1094,23 @@ struct PID_param {
 
 void set_PID(struct PID_param *PID, float P, float I, float D)
 {
-  if (P >= 0 && P < 3)
+  if (P >= 0 && P < 6)
     PID->P = P;
-  if (I >= 0 && I < 3)
+  if (I >= 0 && I < 6)
     PID->I = I;
-  if (D >= 0 && D < 3)
+  if (D >= 0 && D < 255)
     PID->D = D;
 }
 
-void PID_control(struct PID_param *PID, float err, float dt)
+void PID_control(struct PID_param *PID, float err, float freq)
 {
-  float new_int_err = PID->int_err + err * dt;
-  float deriv = (err - PID->last_err) / dt;
+  float new_int_err = PID->int_err + err;
+  float int_output = PID->I * new_int_err / freq;
 
-  if (fabsf(new_int_err) < MAX_THRUST * 0.3f) {
+  if (fabsf(int_output) < MAX_THRUST * 0.3f) {
     PID->int_err = new_int_err;
   }
-  PID->output = (PID->P * err) + (PID->I * PID->int_err) + (PID->D * deriv);
+  PID->output = (PID->P * err) + int_output + PID->D * (err - PID->last_err);
   PID->last_err = err;
 }
 
@@ -1063,29 +1122,73 @@ uint16_t thrust2duty(float thrust)
     thrust = 0.35f;
   else if (thrust > MAX_THRUST) /* limit max thrust */
     thrust = 7.f;
-
-  duty = (sqrtf(thrust * 3420.f) - 18) * 12.5f;
+  /* duty = (sqrtf(thrust * 3420) - 18) * 12.5 */
+  duty = (sqrtf(thrust) * 58.480766f - 18) * 12.5f;
 
   return (uint16_t)duty;
+}
+
+/**
+ * @brief check which motor fault
+ * 
+ * @param roll_err roll error
+ * @param pitch_err pitch error
+ * @param yaw_err yaw error
+ * @param yaw_gain yaw gain
+ * @param threshold 
+ * @return int 0: no failure / 1-4: motor(1-4) fault
+ */
+int check_fault(float roll_err, float pitch_err, float yaw_err,
+                float threshold)
+{
+  float sqr_r_err = roll_err * roll_err;
+  float sqr_p_err = pitch_err * pitch_err;
+  float sqr_y_err = yaw_err * yaw_err;
+  float sqrt_err;
+
+  sqrt_err = sqrtf(sqr_r_err + sqr_p_err + sqr_y_err);
+  if (sqrt_err > threshold) {
+    if ((roll_err > 0) && (pitch_err > 0))
+      return 1;
+    else if ((roll_err < 0) && (pitch_err > 0))
+      return 2;
+    else if ((roll_err < 0) && (pitch_err < 0))
+      return 3;
+    else if ((roll_err > 0) && (pitch_err < 0))
+      return 4;
+  }
+  return 0;
 }
 
 static void ctrl_task(void *param)
 {
   uint16_t thro_duty;
   float thro_thrust;
+  float rp_output[4];
   float q[4];
   float sp_r, sp_p, sp_y;
   float err[3];
-  float dt = 0.02;
-  float P = 1.2f;
-  float I = 0.1f;
-  float D = 0.2f;
-  uint8_t mode = NORMAL_MODE;
+  int i;
+  float rp_err;
+  float P1 = 1.f;
+  float I1 = 0.2f;
+  float D1 = 40.f;
   struct PID_param PID_roll;
   struct PID_param PID_pitch;
   struct PID_param PID_yaw;
+  struct PID_param PID1_roll;
+  struct PID_param PID1_pitch;
+  struct PID_param PID1_yaw;
+  float abs_output;
+  float min_output, max_output;
+  float upper_saturation_ratio;
+  float lower_saturation_ratio;
+  float fault_offset = 0;
+  uint8_t diag_motor_id[] = {2, 3, 0, 1};
+  uint8_t tmp_fault_id = 0;
+  uint8_t mode = NORMAL_MODE;
   struct rec_ctrl ctrl_data = {
-    REC_MARK_CTRL, 0, 0, {0}
+    REC_MARK_CTRL, 0, 0, {0}, 0, 0, 0
   };
   /* M1 (CCW) M2 (CW)
    * M4 (CW)  M3 (CCW) */
@@ -1093,16 +1196,16 @@ static void ctrl_task(void *param)
     vTaskSuspendAll();
     thro_duty = throttle;
     memcpy(q, att.q, 4 * sizeof(float));
-    sp_r = att.roll_target;
-    sp_p = att.pitch_target;
-    sp_y = att.yaw_target;
-    P = ctrl_param.P;
-    I = ctrl_param.I;
-    D = ctrl_param.D;
+    sp_r = att.sp_roll;
+    sp_p = att.sp_pitch;
+    sp_y = att.sp_yaw;
+    P1 = ctrl_param.P;
+    I1 = ctrl_param.I;
+    D1 = ctrl_param.D;
     mode = ctrl_param.mode;
     xTaskResumeAll();
 
-    if (thro_duty < 200) {
+    if (thro_duty < 400) {
 #ifdef REC_THROTTLE_TRIGGER_MODE
       if ((rec_status & REC_STATUS_PROCESS_MASK) == 
            REC_STATUS_PROCESS_UNDONE) {
@@ -1114,12 +1217,16 @@ static void ctrl_task(void *param)
       motor[1] = thro_duty;
       motor[2] = thro_duty;
       motor[3] = thro_duty;
+
       PID_roll.last_err = 0.f;
       PID_pitch.last_err = 0.f;
       PID_yaw.last_err = 0.f;
       PID_roll.int_err = 0.f;
       PID_pitch.int_err = 0.f;
       PID_yaw.int_err = 0.f;
+
+      motor_fault_id = 0;
+      tmp_fault_id = 0;
     } else {
 #ifdef REC_THROTTLE_TRIGGER_MODE
       if ((rec_status & REC_STATUS_PROCESS_MASK) == REC_STATUS_PROCESS_IDLE) {
@@ -1129,25 +1236,88 @@ static void ctrl_task(void *param)
 #endif
       thro_thrust = (float)thro_duty * 0.08f + 18.2f;
       thro_thrust *= thro_thrust * 0.0002924f;
-      set_PID(&PID_roll, P, I, D);
-      set_PID(&PID_pitch, P, I, D);
-      set_PID(&PID_yaw, P, I, D);
       attitude_err(q, sp_r, sp_p, sp_y, err);
-      PID_control(&PID_roll, err[0], dt);
-      PID_control(&PID_pitch, err[1], dt);
-      PID_control(&PID_yaw, err[2], dt);
-      motor[0] = thrust2duty(thro_thrust + PID_roll.output + PID_pitch.output
-                                        - PID_yaw.output);
-      motor[3] = thrust2duty(thro_thrust + PID_roll.output - PID_pitch.output
-                                        + PID_yaw.output);
-      motor[1] = thrust2duty(thro_thrust - PID_roll.output + PID_pitch.output
-                                        + PID_yaw.output);
-      motor[2] = thrust2duty(thro_thrust - PID_roll.output - PID_pitch.output
-                                        - PID_yaw.output);
+      /* PID loop */
+      set_PID(&PID_roll, P1, I1, D1);
+      set_PID(&PID_pitch, P1, I1, D1);
+      set_PID(&PID_yaw, 0.3f, 0, 150.f);
+      PID_control(&PID_roll, err[0], CTRL_FREQ);
+      PID_control(&PID_pitch, err[1], CTRL_FREQ);
+      PID_control(&PID_yaw, err[2], CTRL_FREQ);
+      /* Prevent saturation */
+      abs_output = fabsf(PID_roll.output) +
+                   fabsf(PID_pitch.output) + fabsf(PID_yaw.output);
+      min_output = thro_thrust - abs_output;
+      max_output = thro_thrust + abs_output;
+      upper_saturation_ratio = abs_output / (MAX_THRUST - thro_thrust);
+      lower_saturation_ratio = abs_output / (thro_thrust - MIN_THRUST);
+      if ((max_output > MAX_THRUST) && (min_output < MIN_THRUST)) {
+        if (upper_saturation_ratio > lower_saturation_ratio) {
+          PID_roll.output /= upper_saturation_ratio;
+          PID_pitch.output /= upper_saturation_ratio;
+          PID_yaw.output /= upper_saturation_ratio;
+        } else {
+          PID_roll.output /= lower_saturation_ratio;
+          PID_pitch.output /= lower_saturation_ratio;
+          PID_yaw.output /= lower_saturation_ratio;
+        }
+      } else if (max_output > MAX_THRUST) {
+        PID_roll.output /= upper_saturation_ratio;
+        PID_pitch.output /= upper_saturation_ratio;
+        PID_yaw.output /= upper_saturation_ratio;
+      } else if (min_output < MIN_THRUST) {
+        PID_roll.output /= lower_saturation_ratio;
+        PID_pitch.output /= lower_saturation_ratio;
+        PID_yaw.output /= lower_saturation_ratio;
+      }
+      /* Compute roll/pitch output of 4 motors */
+      rp_output[0] = PID_roll.output + PID_pitch.output;
+      rp_output[1] = -PID_roll.output + PID_pitch.output;
+      rp_output[2] = -PID_roll.output - PID_pitch.output;
+      rp_output[3] = PID_roll.output - PID_pitch.output;
+      
+      if (mode == NORMAL_MODE) {
+        motor[0] = thrust2duty(thro_thrust + rp_output[0] - PID_yaw.output);
+        motor[1] = thrust2duty(thro_thrust + rp_output[1] + PID_yaw.output);
+        motor[2] = thrust2duty(thro_thrust + rp_output[2] - PID_yaw.output);
+        motor[3] = thrust2duty(thro_thrust + rp_output[3] + PID_yaw.output);
+        
+        fault_offset = 0;
+      } else if (mode == TEST_PROPORTION_FAULT_MODE) {
+        if (motor_fault_id == 0) {
+          motor_fault_id = check_fault(err[0], err[1], err[2], 0.52);
+          motor[0] = thrust2duty(thro_thrust + rp_output[0] - PID_yaw.output);
+          motor[1] = thrust2duty(thro_thrust + rp_output[1] + PID_yaw.output);
+          motor[2] = thrust2duty(thro_thrust + rp_output[2] - PID_yaw.output);
+          motor[3] = thrust2duty(thro_thrust + rp_output[3] + PID_yaw.output);
+        } else {
+          rp_err = sqrtf((err[0] * err[0]) + (err[1] * err[1]));
+          if (rp_err > 0.09f) {/* < ~5 deg (0.087 rad) */
+            fault_offset = rp_output[diag_motor_id[motor_fault_id - 1]];
+          }
+          if ((motor_fault_id == 1) || (motor_fault_id == 3)) {
+            motor[0] = thrust2duty(thro_thrust + fault_offset + rp_output[0]);
+            motor[1] = thrust2duty(thro_thrust - fault_offset + rp_output[1]);
+            motor[2] = thrust2duty(thro_thrust + fault_offset + rp_output[2]);
+            motor[3] = thrust2duty(thro_thrust - fault_offset + rp_output[3]);
+          } else if ((motor_fault_id == 2) || (motor_fault_id == 4)) {
+            motor[0] = thrust2duty(thro_thrust - fault_offset + rp_output[0]);
+            motor[1] = thrust2duty(thro_thrust + fault_offset + rp_output[1]);
+            motor[2] = thrust2duty(thro_thrust - fault_offset + rp_output[2]);
+            motor[3] = thrust2duty(thro_thrust + fault_offset + rp_output[3]);
+          }
+        }
+        if (motor[0] > thrust2duty(thro_thrust * (1 - fault_ratio)))
+          motor[0] = thrust2duty(thro_thrust * (1 - fault_ratio));
+      }
+      // for (i = 0; i < 4; i++) {
+      //   motor[i] += motor_bias[i];
+      // }
     }
 #ifdef REC_CTRL
     ctrl_data.throttle = (uint32_t)thro_duty;
     memcpy(ctrl_data.motor, motor, sizeof(motor));
+    memcpy(&ctrl_data.ex, err, sizeof(err));
     rec_data(&ctrl_data);
 #endif
     /* arr range for ESC: 2000 - 3999 */
@@ -1156,7 +1326,7 @@ static void ctrl_task(void *param)
     __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, MOTOR_DUTY_RANGE + motor[2]);
     __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, MOTOR_DUTY_RANGE + motor[3]);
 
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 
@@ -1167,6 +1337,7 @@ static void msg_task(void *param)
   BaseType_t min_remaining, remaining;
   char msg[512];
   uint16_t size;
+  float r, p, y;
 
 	while (1) {
     /* encode ack payload */
@@ -1184,6 +1355,9 @@ static void msg_task(void *param)
     ENCODE_PAYLOAD_REC_STATUS(rec_status, ack_pl.rec_status);
     ENCODE_PAYLOAD_GPS_SV_STATUS(gps_sv_status, ack_pl.gps_sv_status);
     ENCODE_PAYLOAD_GPS_PACC(gps_nav_sol_data->pAcc, ack_pl.gps_pAcc);
+    r = att.roll * RAD2DEG;
+    p = att.pitch * RAD2DEG;
+    y = att.yaw * RAD2DEG;
     xTaskResumeAll();
 
     radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
@@ -1202,7 +1376,8 @@ static void msg_task(void *param)
                     "rsp: %.3f, psp: %.3f, ysp: %.3f\r\n"
                     "h: %.2f, d: %d, V: %.2f, I: %.2f\r\n"
                     "throttle: %d, m0: %d, m1: %d, m2: %d, m3: %d\r\n"
-                    "P: %.2f, I: %.2f, D: %.2f\r\n"
+                    "P1: %.2f, I1: %.2f, D1: %.2f\r\n"
+                    "mode: %d, fault ratio: %.1f, fault id: %d\r\n"
                     "stack wm:\r\n"
                     "radio: %ld, sensor: %ld, tof: %ld, gps: %ld\r\n"
                     "sd: %ld, adc: %ld, ctrl: %ld, msg: %ld\r\n"
@@ -1213,10 +1388,11 @@ static void msg_task(void *param)
                     "ecefX: %ld, ecefY: %ld, ecefZ: %ld\r\n"
                     "pAcc: %ld, numSV: %d\r\n",
 			              att.roll, att.pitch, att.yaw,
-                    att.roll_target, att.pitch_target, att.yaw_target,
+                    att.sp_roll, att.sp_pitch, att.sp_yaw,
              		    pos.height, sensor.distance, bat.voltage, bat.current,
                     throttle, motor[0], motor[1], motor[2], motor[3],
                     ctrl_param.P, ctrl_param.I, ctrl_param.D,
+                    ctrl_param.mode, fault_ratio, motor_fault_id,
                     radio_wm, sensor_wm, tof_wm, gps_wm,
                     sd_wm, adc_wm, ctrl_wm, msg_wm,
                     min_remaining, remaining, rec_status, current_tick,
@@ -1224,6 +1400,7 @@ static void msg_task(void *param)
                     gps_nav_sol_data->ecefX, gps_nav_sol_data->ecefY,
                     gps_nav_sol_data->ecefZ, gps_nav_sol_data->pAcc,
                     gps_nav_sol_data->numSV);
+    // size = snprintf(msg, 512, "0.0,0.0,0.0,0.0,0.0,0.0,%.2f,%.2f,%.2f\n", r, p, y);
     CDC_Transmit_FS((uint8_t *)msg, size);
     vTaskDelay(pdMS_TO_TICKS(20));
 	}

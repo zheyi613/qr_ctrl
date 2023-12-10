@@ -10,8 +10,8 @@
 
 #define NED_FRAME
 
-// #define ROLL_BIAS       0.005  /* unit: rad */
-// #define PITCH_BIAS      -0.028 /* unit: rad */
+// #define ROLL_BIAS       0.020943F /* unit: rad */
+// #define PITCH_BIAS      0.008377F /* unit: rad */
 
 void ahrs_init(float ax, float ay, float az,
                float mx, float my, float mz);

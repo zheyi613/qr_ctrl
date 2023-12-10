@@ -7,7 +7,7 @@
 
 #include "math.h"
 
-#define YAW_WEIGHT      0.2F
+#define YAW_WEIGHT      0.6F
 
 static float inv_sqrt(float x)
 {

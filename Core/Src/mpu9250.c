@@ -215,11 +215,20 @@ static void calibration(void)
                 bias[i] /= (int32_t)packet_count;
         }
         bias[2] -= 16384;
-
+#ifdef GYRO_CALIBRATION_PARAM
+        bias[3] = (int32_t)(GYRO_X_BIAS * 131.F);
+        bias[4] = (int32_t)(GYRO_Y_BIAS * 131.F);
+        bias[5] = (int32_t)(GYRO_Z_BIAS * 131.F);
         for (i = 0; i < 3; i++) {
                 data[2 * i] = ((-bias[3 + i]) >> 10) & 0xFF; /* 32.9 LSB deg/s */
                 data[(2 * i) + 1] = ((-bias[3 + i]) >> 2) & 0xFF;
         }
+#else
+        for (i = 0; i < 3; i++) {
+                data[2 * i] = ((-bias[3 + i]) >> 10) & 0xFF; /* 32.9 LSB deg/s */
+                data[(2 * i) + 1] = ((-bias[3 + i]) >> 2) & 0xFF;
+        }
+#endif
         /* Write gyro offset to MPU9250 */
         write_reg_multi(MPU9250_ADDRESS, XG_OFFSET_H, data, 6);
 #ifdef ACCEL_CALIBRATION_PARAM
@@ -380,6 +389,7 @@ int mpu9250_read_mag(float *mx, float *my, float *mz)
 {
         uint8_t data[7];
         int16_t *ptr = (int16_t *)data;
+        float tmp;
         
         /* Check data ready */
         if (!(read_reg(AK8963_ADDRESS, AK8963_ST1) & 0x01))
@@ -390,12 +400,23 @@ int mpu9250_read_mag(float *mx, float *my, float *mz)
                 return 2;
         
         /* Check data overrun */
-        if (data[7] & 0x08)
+        if (data[6] & 0x08)
                 return 3;
 
         *mx = ((float)(*ptr++) * 0.15F * mag_adj[0]) - MAG_X_BIAS;
         *my = ((float)(*ptr++) * 0.15F * mag_adj[1]) - MAG_Y_BIAS;
         *mz = ((float)(*ptr) * 0.15F * mag_adj[2]) - MAG_Z_BIAS;
 
+        *mx *= MAG_X_SCALE;
+        *my *= MAG_Y_SCALE;
+        *mz *= MAG_Z_SCALE;
+
+#ifdef MAG_NED2ENU
+        /* Transform axes of compass from ENU to NED */
+        tmp = *mx;
+        *mx = *my;
+        *my = tmp;
+        *mz = -(*mz);
+#endif
         return 0;
 }
