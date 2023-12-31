@@ -10,20 +10,24 @@
 
 #define NED_FRAME
 
-// #define ROLL_BIAS       0.020943F /* unit: rad */
-// #define PITCH_BIAS      0.008377F /* unit: rad */
+// #define ROLL_BIAS       0.F /* unit: rad */
+// #define PITCH_BIAS      0.F /* unit: rad */
 
 void ahrs_init(float ax, float ay, float az,
                float mx, float my, float mz);
 void ahrs_init_imu(float ax, float ay, float az);
-void ahrs_update(float gx, float gy, float gz,
-                float ax, float ay, float az,
-                float mx, float my, float mz,
-                float dt);
+void ahrs_update(float gx, float gy, float gz, float dt);
+void ahrs_update_marg(float gx, float gy, float gz,
+                      float ax, float ay, float az,
+                      float mx, float my, float mz,
+                      float dt);
 void ahrs_update_imu(float gx, float gy, float gz,
-                   float ax, float ay, float az,
-                   float dt);
+                     float ax, float ay, float az,
+                     float dt);
+void ahrs_update_mag(float gx, float gy, float gz,
+                     float mx, float my, float mz,
+                     float dt);
 void ahrs2euler(float *r, float *p, float *y);
 void ahrs2quat(float q[4]);
-
+float ahrs_world_linear_az(float ax, float ay, float az);
 #endif

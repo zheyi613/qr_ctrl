@@ -43,6 +43,7 @@ struct rec_imu {
         float gx;
         float gy;
         float gz;
+        float world_linear_az;
 };
 
 struct rec_mag {
@@ -93,6 +94,7 @@ struct rec_ctrl {
         float ex;
         float ey;
         float ez;
+        uint32_t fault_motor;
 };
 
 

@@ -13,7 +13,7 @@
 #define LPS22HB_ADDR    (0b1011100 | LPS22HB_SA0) 
 #define LPS22HB_ID      0xB1
 
-#define LPS22HB_PRESSURE_OFS    4.67 /* hPa */
+#define LPS22HB_PRESSURE_OFS    3.83 /* hPa */
 /* Maximum package size to read even if FIFO stored data level is higher */
 #define LPS22HB_READ_MAX_FIFO_SIZE      2
 

@@ -9,9 +9,6 @@
 #define MAG_NED2ENU
 
 #ifdef ACCEL_CALIBRATION_PARAM
-// #define ACCEL_X_BIAS  -0.1047F
-// #define ACCEL_Y_BIAS  -0.0295F
-// #define ACCEL_Z_BIAS  -0.0115F
 #define ACCEL_X_BIAS  -0.0665F
 #define ACCEL_Y_BIAS  -0.0210F
 #define ACCEL_Z_BIAS  -0.0175F
@@ -26,12 +23,21 @@
 #define GYRO_Z_BIAS   1.6790F
 #endif
 
-#define MAG_X_BIAS    -9.9499F
-#define MAG_Y_BIAS    21.5623F
-#define MAG_Z_BIAS    -54.9708F
-#define MAG_X_SCALE   0.9882F
-#define MAG_Y_SCALE   1.0219F
-#define MAG_Z_SCALE   0.9903F
+/* Magnetometer Bias */
+#define MAG_X_BIAS    -3.7995F
+#define MAG_Y_BIAS    23.4057F
+#define MAG_Z_BIAS    -59.9935F
+/* Corrected Matrix :
+ * [ xx xy xz ]
+ * [ xy yy yz ]
+ * [ xz yz zz ]
+ */
+#define MAG_XX_SCALE  0.9818F
+#define MAG_XY_SCALE  -0.0080F
+#define MAG_XZ_SCALE  -0.0154F
+#define MAG_YY_SCALE  1.0129F
+#define MAG_YZ_SCALE  -0.0049F
+#define MAG_ZZ_SCALE  1.0059F
 
 #define MPU9250_AD0   0
 

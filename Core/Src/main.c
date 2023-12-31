@@ -67,7 +67,7 @@
 #define MSG_TASK
 
 /* ESC calibration mode */
-// #define ESC_CALIBRATION
+#define ESC_CALIBRATION
 
 /* Module initialize failed number */
 enum module_init_failed_id {
@@ -109,9 +109,9 @@ enum module_init_failed_id {
 /* Select SD recording data */
 #define REC_IMU
 #define REC_MAG
-#define REC_BARO
+// #define REC_BARO
 // #define REC_TOF
-#define REC_BATTERY
+// #define REC_BATTERY
 #define REC_ATT
 #define REC_CTRL
 
@@ -124,6 +124,9 @@ enum module_init_failed_id {
 #define GPS_RECEIVE_SYNC_1    0
 #define GPS_RECEIVE_SYNC_2    1
 #define GPS_RECEIVE_DATA      2
+
+/* ADC moving average window size */
+#define ADC_MA_WINDOW_SIZE    10
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -188,6 +191,7 @@ struct position {
   float sp_height;
 } pos;
 
+float world_linear_az;
 struct battery {
   float voltage;
   float current;
@@ -366,8 +370,7 @@ int main(void)
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_4);
   
-  HAL_Delay(5000);
-  HAL_Delay(5000);
+  HAL_Delay(3000);
 
   throttle = MOTOR_INITIAL_DUTY;
   for (uint8_t i = 0; i < 4; i++) {
@@ -377,11 +380,9 @@ int main(void)
   __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, MOTOR_DUTY_RANGE + motor[1]);
   __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, MOTOR_DUTY_RANGE + motor[2]);
   __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, MOTOR_DUTY_RANGE + motor[3]);
-  HAL_Delay(5000);
-  HAL_Delay(5000);
   #endif
   /* Wait 1 sec to power up and mechanical vibration */
-  HAL_Delay(1000);
+  HAL_Delay(3000);
 
   set_bus_mode(BUS_POLLING_MODE); /* set bus to blocking mode */
 
@@ -699,6 +700,7 @@ static void radio_task(void *param)
     }
     /* If lost connected 1 sec, landing by minus 100 throttle every 500 ms */
     if (disconnect_count > 10) {
+      ctrl_param.mode = NORMAL_MODE;
       tmp = (int32_t)throttle;
       tmp -= 100;
       if (tmp < 0)
@@ -728,7 +730,6 @@ static void radio_task(void *param)
       DECODE_PAYLOAD_CTRL_D_GAIN(pl.D, ctrl_param.D);
       DECODE_PAYLOAD_MODE(pl.mode, ctrl_param.mode);
       DECODE_PAYLOAD_FAULT_RATIO(pl.fault_ratio, fault_ratio);
-      memcpy(motor_bias, pl.motor_bias, sizeof(motor_bias));
       disconnect_count = 0;
     } else {
       disconnect_count++;
@@ -808,6 +809,18 @@ void IIR_filter(int order, float *num, float *den, float *x, float *y)
   }
 }
 
+float movavg(float *data, float val, uint8_t id, int size)
+{
+  float total = 0;
+
+  data[id] = val;
+
+  for (int i = 0; i < size; i++) {
+    total += data[i];
+  }
+  return total / size;
+}
+
 static void sensor_task(void *param)
 {
   TickType_t mag_tick = 0, baro_tick = 0;
@@ -816,8 +829,11 @@ static void sensor_task(void *param)
   float mx, my, mz, mag_square;
   float press, temp;
   uint8_t mag_ready = 0;
+  uint8_t ma_id = {0};
+  float ma_ax[5] = {0}, ma_ay[5] = {0}, ma_az[5] = {0};
+  float ma_gx[5] = {0}, ma_gy[5] = {0}, ma_gz[5] = {0};
   struct rec_imu imu_data = {
-    REC_MARK_IMU, 0, 0, 0, 0, 0, 0, 0,
+    REC_MARK_IMU, 0, 0, 0, 0, 0, 0, 0, 0,
   };
   struct rec_mag mag_data = {
     REC_MARK_MAG, 0, 0, 0, 0
@@ -828,11 +844,6 @@ static void sensor_task(void *param)
   struct rec_att att_data = {
     REC_MARK_ATT, 0, 0, 0, 0, 0, 0
   };
-  float acc_lowpass_num[] = {5.810453E-4F, 2.324181E-3F, 3.486272E-3F,
-                             2.324181E-3F, 5.810453E-4F};
-  float acc_lowpass_den[] = {1, -3.102466F, 3.688699F, -1.981535F, 0.404599F};
-  float ax_X[5] = {0}, ay_X[5] = {0}, az_X[5] = {0};
-  float ax_Y[5] = {0}, ay_Y[5] = {0}, az_Y[5] = {0};
 
   while (1) {
     current_tick = xTaskGetTickCount();
@@ -841,32 +852,30 @@ static void sensor_task(void *param)
       ENU2NED(ax, ay, az);
       gx *= DEG2RAD;
       gy *= DEG2RAD;
-      gz *= DEG2RAD;    
-      // sensor.ax = ax;
-      // sensor.ay = ay;
-      // sensor.az = az;
-      sensor.gx = gx;
-      sensor.gy = gy;
-      sensor.gz = gz;
-      ax_X[0] = ax;
-      ay_X[0] = ay;
-      az_X[0] = az;
-      IIR_filter(4, acc_lowpass_num, acc_lowpass_den, ax_X, ax_Y);
-      IIR_filter(4, acc_lowpass_num, acc_lowpass_den, ay_X, ay_Y);
-      IIR_filter(4, acc_lowpass_num, acc_lowpass_den, az_X, az_Y);
-      ax = ax_Y[0];
-      ay = ay_Y[0];
-      az = az_Y[0];
+      gz *= DEG2RAD;
+      ax = movavg(ma_ax, ax, ma_id, 5);
+      ay = movavg(ma_ay, ay, ma_id, 5);
+      az = movavg(ma_az, az, ma_id, 5);
       sensor.ax = ax;
       sensor.ay = ay;
       sensor.az = az;
+      gx = movavg(ma_gx, gx, ma_id, 5);
+      gy = movavg(ma_gy, gy, ma_id, 5);
+      gz = movavg(ma_gz, gz, ma_id, 5);
+      sensor.gx = gx;
+      sensor.gy = gy;
+      sensor.gz = gz;
+      if ((++ma_id) == 5)
+        ma_id = 0;
+      world_linear_az = ahrs_world_linear_az(ax, ay, az);
 #ifdef REC_IMU
       memcpy(&imu_data.ax, &sensor.ax, 24);
+      imu_data.world_linear_az = world_linear_az;
       rec_data(&imu_data);
 #endif
     }
+    mag_ready = 0;
     if (mag_tick == pdMS_TO_TICKS(10)) {
-      mag_ready = 0;
       if (!mpu9250_read_mag(&mx, &my, &mz)) {
         mag_square = mx * mx + my * my + mz * mz;
         /* check if disturbed or not by square */
@@ -903,7 +912,7 @@ static void sensor_task(void *param)
     baro_tick++;
     /* Update attitude */
     if (mag_ready)
-      ahrs_update(gx, gy, gz, ax, ay, az, mx, my, mz, dt);
+      ahrs_update_marg(gx, gy, gz, ax, ay, az, mx, my, mz, dt);
     else
       ahrs_update_imu(gx, gy, gz, ax, ay, az, dt);
     ahrs2euler(&att.roll, &att.pitch, &att.yaw);
@@ -1058,6 +1067,9 @@ static void adc_task(void *param)
 {
   uint16_t data[2];
   uint8_t start_flag = 1;
+  uint8_t id = 0, i;
+  float movavg_data[ADC_MA_WINDOW_SIZE] = {0};
+  float total;
   struct rec_battery bat_data = {
     REC_MARK_BATTERY, 0, 0, 0
   };
@@ -1068,8 +1080,16 @@ static void adc_task(void *param)
       start_flag = 0;
     }
     ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
+    /* Moving Average (10 samples) */
     /* Voltage = adc / 4096 * 3.3 / 10k * (10k + 51k) */
-    bat.voltage = (float)data[0] * 0.0049145507f;
+    movavg_data[id] = (float)data[0] * 0.0049145507f;
+    total = 0;
+    for (i = 0; i < ADC_MA_WINDOW_SIZE; i++) {
+      total += movavg_data[i];
+    }
+    if ((++id) >= ADC_MA_WINDOW_SIZE)
+      id = 0;
+    bat.voltage = total / ADC_MA_WINDOW_SIZE;
     /* Original current = ((adc / 4096 * 3.3) - 2.4677) / 0.0328
      * Vcc: 5V, Current direction: negative, Range: 0 ~ 2.5V
      * Current = (2.4677 - (adc / 4096 * 3.3)) / 0.0328 */
@@ -1129,6 +1149,38 @@ uint16_t thrust2duty(float thrust)
 }
 
 /**
+ * @brief normalize output if saturation is occured
+ * 
+ * @param thro_thrust input throttle
+ * @param abs_output absolute output of every err (ex: |r_out| + |p_out|)
+ * @return float saturation ratio
+ */
+float saturated_ctrl(float thro_thrust, float abs_output)
+{
+  float min_output, max_output;
+  float upper_saturation_ratio, lower_saturation_ratio;
+  float saturation_ratio;
+
+  saturation_ratio = 1;
+  min_output = thro_thrust - abs_output;
+  max_output = thro_thrust + abs_output;
+  upper_saturation_ratio = abs_output / (MAX_THRUST - thro_thrust);
+  lower_saturation_ratio = abs_output / (thro_thrust - MIN_THRUST);
+  if ((max_output > MAX_THRUST) && (min_output < MIN_THRUST)) {
+    if (upper_saturation_ratio > lower_saturation_ratio)
+      saturation_ratio = upper_saturation_ratio;
+    else
+      saturation_ratio = lower_saturation_ratio;
+  } else if (max_output > MAX_THRUST) {
+    saturation_ratio = upper_saturation_ratio;
+  } else if (min_output < MIN_THRUST) {
+    saturation_ratio = lower_saturation_ratio;
+  }
+
+  return saturation_ratio;
+}
+
+/**
  * @brief check which motor fault
  * 
  * @param roll_err roll error
@@ -1141,13 +1193,13 @@ uint16_t thrust2duty(float thrust)
 int check_fault(float roll_err, float pitch_err, float yaw_err,
                 float threshold)
 {
-  float sqr_r_err = roll_err * roll_err;
-  float sqr_p_err = pitch_err * pitch_err;
-  float sqr_y_err = yaw_err * yaw_err;
-  float sqrt_err;
+  float abs_r_err = fabsf(roll_err);
+  float abs_p_err = fabsf(pitch_err);
+  float abs_y_err = fabsf(yaw_err);
+  float total_err;
 
-  sqrt_err = sqrtf(sqr_r_err + sqr_p_err + sqr_y_err);
-  if (sqrt_err > threshold) {
+  total_err = abs_r_err + abs_p_err + abs_y_err;
+  if (total_err > threshold) {
     if ((roll_err > 0) && (pitch_err > 0))
       return 1;
     else if ((roll_err < 0) && (pitch_err > 0))
@@ -1168,27 +1220,20 @@ static void ctrl_task(void *param)
   float q[4];
   float sp_r, sp_p, sp_y;
   float err[3];
-  int i;
   float rp_err;
-  float P1 = 1.f;
-  float I1 = 0.2f;
-  float D1 = 40.f;
+  float P1 = 0.5f;
+  float I1 = 0.05f;
+  float D1 = 20.f;
   struct PID_param PID_roll;
   struct PID_param PID_pitch;
   struct PID_param PID_yaw;
-  struct PID_param PID1_roll;
-  struct PID_param PID1_pitch;
-  struct PID_param PID1_yaw;
   float abs_output;
-  float min_output, max_output;
-  float upper_saturation_ratio;
-  float lower_saturation_ratio;
+  float saturation_ratio;
   float fault_offset = 0;
   uint8_t diag_motor_id[] = {2, 3, 0, 1};
-  uint8_t tmp_fault_id = 0;
   uint8_t mode = NORMAL_MODE;
   struct rec_ctrl ctrl_data = {
-    REC_MARK_CTRL, 0, 0, {0}, 0, 0, 0
+    REC_MARK_CTRL, 0, 0, {0}, 0, 0, 0, 0
   };
   /* M1 (CCW) M2 (CW)
    * M4 (CW)  M3 (CCW) */
@@ -1226,7 +1271,6 @@ static void ctrl_task(void *param)
       PID_yaw.int_err = 0.f;
 
       motor_fault_id = 0;
-      tmp_fault_id = 0;
     } else {
 #ifdef REC_THROTTLE_TRIGGER_MODE
       if ((rec_status & REC_STATUS_PROCESS_MASK) == REC_STATUS_PROCESS_IDLE) {
@@ -1240,35 +1284,22 @@ static void ctrl_task(void *param)
       /* PID loop */
       set_PID(&PID_roll, P1, I1, D1);
       set_PID(&PID_pitch, P1, I1, D1);
-      set_PID(&PID_yaw, 0.3f, 0, 150.f);
+      set_PID(&PID_yaw, 0.5f, 0.1f, 120.f);
       PID_control(&PID_roll, err[0], CTRL_FREQ);
       PID_control(&PID_pitch, err[1], CTRL_FREQ);
       PID_control(&PID_yaw, err[2], CTRL_FREQ);
       /* Prevent saturation */
-      abs_output = fabsf(PID_roll.output) +
-                   fabsf(PID_pitch.output) + fabsf(PID_yaw.output);
-      min_output = thro_thrust - abs_output;
-      max_output = thro_thrust + abs_output;
-      upper_saturation_ratio = abs_output / (MAX_THRUST - thro_thrust);
-      lower_saturation_ratio = abs_output / (thro_thrust - MIN_THRUST);
-      if ((max_output > MAX_THRUST) && (min_output < MIN_THRUST)) {
-        if (upper_saturation_ratio > lower_saturation_ratio) {
-          PID_roll.output /= upper_saturation_ratio;
-          PID_pitch.output /= upper_saturation_ratio;
-          PID_yaw.output /= upper_saturation_ratio;
-        } else {
-          PID_roll.output /= lower_saturation_ratio;
-          PID_pitch.output /= lower_saturation_ratio;
-          PID_yaw.output /= lower_saturation_ratio;
-        }
-      } else if (max_output > MAX_THRUST) {
-        PID_roll.output /= upper_saturation_ratio;
-        PID_pitch.output /= upper_saturation_ratio;
-        PID_yaw.output /= upper_saturation_ratio;
-      } else if (min_output < MIN_THRUST) {
-        PID_roll.output /= lower_saturation_ratio;
-        PID_pitch.output /= lower_saturation_ratio;
-        PID_yaw.output /= lower_saturation_ratio;
+      abs_output = fabsf(PID_roll.output) + fabsf(PID_pitch.output);
+      if (motor_fault_id == 0) {
+        abs_output += fabsf(PID_yaw.output);
+        saturation_ratio = saturated_ctrl(thro_thrust, abs_output);
+        PID_roll.output /= saturation_ratio;
+        PID_pitch.output /= saturation_ratio;
+        PID_yaw.output /= saturation_ratio;
+      } else {
+        saturation_ratio = saturated_ctrl(thro_thrust, abs_output);
+        PID_roll.output /= saturation_ratio;
+        PID_pitch.output /= saturation_ratio;
       }
       /* Compute roll/pitch output of 4 motors */
       rp_output[0] = PID_roll.output + PID_pitch.output;
@@ -1282,8 +1313,9 @@ static void ctrl_task(void *param)
         motor[2] = thrust2duty(thro_thrust + rp_output[2] - PID_yaw.output);
         motor[3] = thrust2duty(thro_thrust + rp_output[3] + PID_yaw.output);
         
+        motor_fault_id = 0;
         fault_offset = 0;
-      } else if (mode == TEST_PROPORTION_FAULT_MODE) {
+      } else if (mode == TEST_FAULT_MODE) {
         if (motor_fault_id == 0) {
           motor_fault_id = check_fault(err[0], err[1], err[2], 0.52);
           motor[0] = thrust2duty(thro_thrust + rp_output[0] - PID_yaw.output);
@@ -1292,7 +1324,7 @@ static void ctrl_task(void *param)
           motor[3] = thrust2duty(thro_thrust + rp_output[3] + PID_yaw.output);
         } else {
           rp_err = sqrtf((err[0] * err[0]) + (err[1] * err[1]));
-          if (rp_err > 0.09f) {/* < ~5 deg (0.087 rad) */
+          if (rp_err > 0.035f) {/* < ~2 deg (0.0349 rad) */
             fault_offset = rp_output[diag_motor_id[motor_fault_id - 1]];
           }
           if ((motor_fault_id == 1) || (motor_fault_id == 3)) {
@@ -1310,14 +1342,12 @@ static void ctrl_task(void *param)
         if (motor[0] > thrust2duty(thro_thrust * (1 - fault_ratio)))
           motor[0] = thrust2duty(thro_thrust * (1 - fault_ratio));
       }
-      // for (i = 0; i < 4; i++) {
-      //   motor[i] += motor_bias[i];
-      // }
     }
 #ifdef REC_CTRL
     ctrl_data.throttle = (uint32_t)thro_duty;
     memcpy(ctrl_data.motor, motor, sizeof(motor));
     memcpy(&ctrl_data.ex, err, sizeof(err));
+    ctrl_data.fault_motor = (uint32_t)motor_fault_id;
     rec_data(&ctrl_data);
 #endif
     /* arr range for ESC: 2000 - 3999 */
@@ -1360,49 +1390,50 @@ static void msg_task(void *param)
     y = att.yaw * RAD2DEG;
     xTaskResumeAll();
 
-    radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
-    sensor_wm = uxTaskGetStackHighWaterMark(sensor_handler);
-    // tof_wm = uxTaskGetStackHighWaterMark(tof_handler);
-    gps_wm = uxTaskGetStackHighWaterMark(gps_handler);
-    sd_wm = uxTaskGetStackHighWaterMark(sd_handler);
-    adc_wm = uxTaskGetStackHighWaterMark(adc_handler);
-    ctrl_wm = uxTaskGetStackHighWaterMark(ctrl_handler);
-    msg_wm = uxTaskGetStackHighWaterMark(msg_handler);
+    // radio_wm = uxTaskGetStackHighWaterMark(radio_handler);
+    // sensor_wm = uxTaskGetStackHighWaterMark(sensor_handler);
+    // // tof_wm = uxTaskGetStackHighWaterMark(tof_handler);
+    // gps_wm = uxTaskGetStackHighWaterMark(gps_handler);
+    // sd_wm = uxTaskGetStackHighWaterMark(sd_handler);
+    // adc_wm = uxTaskGetStackHighWaterMark(adc_handler);
+    // ctrl_wm = uxTaskGetStackHighWaterMark(ctrl_handler);
+    // msg_wm = uxTaskGetStackHighWaterMark(msg_handler);
 
-    min_remaining = xPortGetMinimumEverFreeHeapSize();
-    remaining = xPortGetFreeHeapSize();
+    // min_remaining = xPortGetMinimumEverFreeHeapSize();
+    // remaining = xPortGetFreeHeapSize();
 
-		size = snprintf(msg, 512, "r: %.3f, p: %.3f, y: %.3f, "
-                    "rsp: %.3f, psp: %.3f, ysp: %.3f\r\n"
-                    "h: %.2f, d: %d, V: %.2f, I: %.2f\r\n"
-                    "throttle: %d, m0: %d, m1: %d, m2: %d, m3: %d\r\n"
-                    "P1: %.2f, I1: %.2f, D1: %.2f\r\n"
-                    "mode: %d, fault ratio: %.1f, fault id: %d\r\n"
-                    "stack wm:\r\n"
-                    "radio: %ld, sensor: %ld, tof: %ld, gps: %ld\r\n"
-                    "sd: %ld, adc: %ld, ctrl: %ld, msg: %ld\r\n"
-                    "min rm: %ld, cur rm: %ld, rec status: %d\r\n"
-                    "current tick: %ld\r\n"
-                    "gps:\r\n"
-                    "iTOW: %ld, gpsFix: %d\r\n"
-                    "ecefX: %ld, ecefY: %ld, ecefZ: %ld\r\n"
-                    "pAcc: %ld, numSV: %d\r\n",
-			              att.roll, att.pitch, att.yaw,
-                    att.sp_roll, att.sp_pitch, att.sp_yaw,
-             		    pos.height, sensor.distance, bat.voltage, bat.current,
-                    throttle, motor[0], motor[1], motor[2], motor[3],
-                    ctrl_param.P, ctrl_param.I, ctrl_param.D,
-                    ctrl_param.mode, fault_ratio, motor_fault_id,
-                    radio_wm, sensor_wm, tof_wm, gps_wm,
-                    sd_wm, adc_wm, ctrl_wm, msg_wm,
-                    min_remaining, remaining, rec_status, current_tick,
-                    gps_nav_sol_data->iTOW, gps_nav_sol_data->gpsFix,
-                    gps_nav_sol_data->ecefX, gps_nav_sol_data->ecefY,
-                    gps_nav_sol_data->ecefZ, gps_nav_sol_data->pAcc,
-                    gps_nav_sol_data->numSV);
-    // size = snprintf(msg, 512, "0.0,0.0,0.0,0.0,0.0,0.0,%.2f,%.2f,%.2f\n", r, p, y);
+		// size = snprintf(msg, 512, "r: %.3f, p: %.3f, y: %.3f, "
+    //                 "rsp: %.3f, psp: %.3f, ysp: %.3f\r\n"
+    //                 "hsp: %.2f, h: %.2f, d: %d, V: %.2f, I: %.2f\r\n"
+    //                 "throttle: %d, m0: %d, m1: %d, m2: %d, m3: %d\r\n"
+    //                 "P1: %.2f, I1: %.2f, D1: %.2f\r\n"
+    //                 "mode: %d, fault ratio: %.1f, fault id: %d\r\n"
+    //                 "stack wm:\r\n"
+    //                 "radio: %ld, sensor: %ld, tof: %ld, gps: %ld\r\n"
+    //                 "sd: %ld, adc: %ld, ctrl: %ld, msg: %ld\r\n"
+    //                 "min rm: %ld, cur rm: %ld, rec status: %d\r\n"
+    //                 "current tick: %ld\r\n"
+    //                 "gps:\r\n"
+    //                 "iTOW: %ld, gpsFix: %d\r\n"
+    //                 "ecefX: %ld, ecefY: %ld, ecefZ: %ld\r\n"
+    //                 "pAcc: %ld, numSV: %d\r\n",
+		// 	              att.roll, att.pitch, att.yaw,
+    //                 att.sp_roll, att.sp_pitch, att.sp_yaw,
+    //          		    pos.sp_height, pos.height, sensor.distance,
+    //                 bat.voltage, bat.current,
+    //                 throttle, motor[0], motor[1], motor[2], motor[3],
+    //                 ctrl_param.P, ctrl_param.I, ctrl_param.D,
+    //                 ctrl_param.mode, fault_ratio, motor_fault_id,
+    //                 radio_wm, sensor_wm, tof_wm, gps_wm,
+    //                 sd_wm, adc_wm, ctrl_wm, msg_wm,
+    //                 min_remaining, remaining, rec_status, current_tick,
+    //                 gps_nav_sol_data->iTOW, gps_nav_sol_data->gpsFix,
+    //                 gps_nav_sol_data->ecefX, gps_nav_sol_data->ecefY,
+    //                 gps_nav_sol_data->ecefZ, gps_nav_sol_data->pAcc,
+    //                 gps_nav_sol_data->numSV);
+    size = snprintf(msg, 512, "0.0,0.0,0.0,0.0,0.0,0.0,%.2f,%.2f,%.2f\n", r, p, y);
     CDC_Transmit_FS((uint8_t *)msg, size);
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(10));
 	}
 }
 /* USER CODE END 4 */

@@ -389,7 +389,7 @@ int mpu9250_read_mag(float *mx, float *my, float *mz)
 {
         uint8_t data[7];
         int16_t *ptr = (int16_t *)data;
-        float tmp;
+        float tmp, x, y, z;
         
         /* Check data ready */
         if (!(read_reg(AK8963_ADDRESS, AK8963_ST1) & 0x01))
@@ -403,16 +403,16 @@ int mpu9250_read_mag(float *mx, float *my, float *mz)
         if (data[6] & 0x08)
                 return 3;
 
-        *mx = ((float)(*ptr++) * 0.15F * mag_adj[0]) - MAG_X_BIAS;
-        *my = ((float)(*ptr++) * 0.15F * mag_adj[1]) - MAG_Y_BIAS;
-        *mz = ((float)(*ptr) * 0.15F * mag_adj[2]) - MAG_Z_BIAS;
+        x = ((float)(*ptr++) * 0.15F * mag_adj[0]) - MAG_X_BIAS;
+        y = ((float)(*ptr++) * 0.15F * mag_adj[1]) - MAG_Y_BIAS;
+        z = ((float)(*ptr) * 0.15F * mag_adj[2]) - MAG_Z_BIAS;
 
-        *mx *= MAG_X_SCALE;
-        *my *= MAG_Y_SCALE;
-        *mz *= MAG_Z_SCALE;
+        *mx = (x * MAG_XX_SCALE) + (y * MAG_XY_SCALE) + (z * MAG_XZ_SCALE);
+        *my = (x * MAG_XY_SCALE) + (y * MAG_YY_SCALE) + (z * MAG_YZ_SCALE);
+        *mz = (x * MAG_XZ_SCALE) + (y * MAG_YZ_SCALE) + (z * MAG_ZZ_SCALE);
 
 #ifdef MAG_NED2ENU
-        /* Transform axes of compass from ENU to NED */
+        /* Transform axes of compass from NED to ENU */
         tmp = *mx;
         *mx = *my;
         *my = tmp;

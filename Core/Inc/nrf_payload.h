@@ -11,7 +11,7 @@
 
 /* Mission mode */
 #define NORMAL_MODE                0
-#define TEST_PROPORTION_FAULT_MODE 1
+#define TEST_FAULT_MODE            1
 
 /* Payload definition */
 struct payload {
@@ -25,8 +25,7 @@ struct payload {
         uint8_t D;          /* 1 LSB */
         uint8_t mode;
         uint8_t fault_ratio;
-        uint8_t motor_bias[4];
-        uint8_t dummy[13];
+        uint8_t dummy[17];
 };
 #define PAYLOAD_WIDTH           sizeof(struct payload)
 
