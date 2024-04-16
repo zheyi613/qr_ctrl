@@ -94,6 +94,7 @@ struct rec_ctrl {
         float ex;
         float ey;
         float ez;
+        float offset;
         uint32_t fault_motor;
 };
 

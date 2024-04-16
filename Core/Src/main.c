@@ -1161,31 +1161,41 @@ uint16_t thrust2duty(float thrust)
  * @brief normalize output if saturation is occured
  * 
  * @param thro_thrust input throttle
+ * @param offset fault motor offset
  * @param abs_output absolute output of every err (ex: |r_out| + |p_out|)
  * @return float saturation ratio
  */
-float saturated_ctrl(float thro_thrust, float abs_output)
+float saturated_ctrl(float thro_thrust, float offset, float abs_output)
 {
-  float min_output, max_output;
+  float upper_range, lower_range;
   float upper_saturation_ratio, lower_saturation_ratio;
   float saturation_ratio;
 
   saturation_ratio = 1;
-  min_output = thro_thrust - abs_output;
-  max_output = thro_thrust + abs_output;
-  upper_saturation_ratio = abs_output / (MAX_THRUST - thro_thrust);
-  lower_saturation_ratio = abs_output / (thro_thrust - MIN_THRUST);
-  if ((max_output > MAX_THRUST) && (min_output < MIN_THRUST)) {
-    if (upper_saturation_ratio > lower_saturation_ratio)
-      saturation_ratio = upper_saturation_ratio;
-    else
-      saturation_ratio = lower_saturation_ratio;
-  } else if (max_output > MAX_THRUST) {
-    saturation_ratio = upper_saturation_ratio;
-  } else if (min_output < MIN_THRUST) {
-    saturation_ratio = lower_saturation_ratio;
-  }
+  upper_range = MAX_THRUST - thro_thrust - offset;
+  lower_range = thro_thrust - offset - MIN_THRUST;
+  upper_saturation_ratio = abs_output / upper_range;
+  lower_saturation_ratio = abs_output / lower_range;
 
+  if ((upper_range > 0.f) && 
+      (lower_range < (thro_thrust - MIN_THRUST) * 0.4f) &&
+      (offset > 0.f)) {
+    if (abs_output > upper_range)
+      saturation_ratio = upper_saturation_ratio;
+  } else if ((upper_range > 0.f) && (lower_range > 0.f)) {
+    if ((abs_output > upper_range) && (abs_output > lower_range)) {
+      if (upper_saturation_ratio > lower_saturation_ratio)
+        saturation_ratio = upper_saturation_ratio;
+      else
+        saturation_ratio = lower_saturation_ratio;
+    } else if (abs_output > upper_range) {
+      saturation_ratio = upper_saturation_ratio;
+    } else if (abs_output > lower_range) {
+      saturation_ratio = lower_saturation_ratio;
+    }
+  } else {
+    saturation_ratio = 1000.f; /* if range = 0, force ctrl output ~ 0 */
+  }
   return saturation_ratio;
 }
 
@@ -1243,10 +1253,11 @@ static void ctrl_task(void *param)
   float abs_output;
   float saturation_ratio;
   float fault_offset = 0, tmp_rp_output;
+  float upper_offset_limit, lower_offset_limit, max_offset;
   uint8_t diag_motor_id[] = {2, 3, 0, 1};
   uint8_t mode = NORMAL_MODE;
   struct rec_ctrl ctrl_data = {
-    REC_MARK_CTRL, 0, 0, {0}, 0, 0, 0, 0
+    REC_MARK_CTRL, 0, 0, {0}, 0, 0, 0, 0, 0
   };
   /* M1 (CCW) M2 (CW)
    * M4 (CW)  M3 (CCW) */
@@ -1326,12 +1337,13 @@ static void ctrl_task(void *param)
       abs_output = fabsf(PID2_roll.output) + fabsf(PID2_pitch.output);
       if (motor_fault_id == 0) {
         abs_output += fabsf(PID_yaw.output);
-        saturation_ratio = saturated_ctrl(thro_thrust, abs_output);
+        saturation_ratio = saturated_ctrl(thro_thrust, 0, abs_output);
         PID2_roll.output /= saturation_ratio;
         PID2_pitch.output /= saturation_ratio;
         PID2_yaw.output /= saturation_ratio;
       } else {
-        saturation_ratio = saturated_ctrl(thro_thrust, abs_output);
+        saturation_ratio = saturated_ctrl(thro_thrust, fault_offset,
+                                          abs_output);
         PID2_roll.output /= saturation_ratio;
         PID2_pitch.output /= saturation_ratio;
       }
@@ -1359,21 +1371,30 @@ static void ctrl_task(void *param)
           motor[3] = thrust2duty(thro_thrust + rp_output[3] + PID2_yaw.output);
         } else {
           rp_err = sqrtf((err[0] * err[0]) + (err[1] * err[1]));
-          tmp_rp_output = rp_output[diag_motor_id[motor_fault_id - 1]];
-          /* < ~2.3 deg (0.04 rad) */
-          if ((rp_err > 0.04f) && (tmp_rp_output < fault_offset)) {
-            fault_offset = tmp_rp_output;
+          tmp_rp_output = -rp_output[diag_motor_id[motor_fault_id - 1]];
+          /* < ~5.7 deg (0.1 rad) */
+          if ((rp_err > 0.1f) && (tmp_rp_output > fault_offset)) {
+            upper_offset_limit = MAX_THRUST - thro_thrust;
+            lower_offset_limit = thro_thrust - MIN_THRUST;
+            if (upper_offset_limit > lower_offset_limit)
+              max_offset = lower_offset_limit;
+            else
+              max_offset = upper_offset_limit;
+            if (tmp_rp_output < max_offset)
+              fault_offset = tmp_rp_output;
+            else
+              fault_offset = max_offset;
           }
           if ((motor_fault_id == 1) || (motor_fault_id == 3)) {
-            motor[0] = thrust2duty(thro_thrust + fault_offset + rp_output[0]);
-            motor[1] = thrust2duty(thro_thrust - fault_offset + rp_output[1]);
-            motor[2] = thrust2duty(thro_thrust + fault_offset + rp_output[2]);
-            motor[3] = thrust2duty(thro_thrust - fault_offset + rp_output[3]);
-          } else if ((motor_fault_id == 2) || (motor_fault_id == 4)) {
             motor[0] = thrust2duty(thro_thrust - fault_offset + rp_output[0]);
             motor[1] = thrust2duty(thro_thrust + fault_offset + rp_output[1]);
             motor[2] = thrust2duty(thro_thrust - fault_offset + rp_output[2]);
             motor[3] = thrust2duty(thro_thrust + fault_offset + rp_output[3]);
+          } else if ((motor_fault_id == 2) || (motor_fault_id == 4)) {
+            motor[0] = thrust2duty(thro_thrust + fault_offset + rp_output[0]);
+            motor[1] = thrust2duty(thro_thrust - fault_offset + rp_output[1]);
+            motor[2] = thrust2duty(thro_thrust + fault_offset + rp_output[2]);
+            motor[3] = thrust2duty(thro_thrust - fault_offset + rp_output[3]);
           }
         }
         if (motor[0] > thrust2duty(thro_thrust * (1 - fault_ratio)))
@@ -1384,6 +1405,7 @@ static void ctrl_task(void *param)
     ctrl_data.throttle = (uint32_t)thro_duty;
     memcpy(ctrl_data.motor, motor, sizeof(motor));
     memcpy(&ctrl_data.ex, err, sizeof(err));
+    ctrl_data.offset = fault_offset;
     ctrl_data.fault_motor = (uint32_t)motor_fault_id;
     rec_data(&ctrl_data);
 #endif
