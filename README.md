@@ -7,7 +7,8 @@ A FreeRTOS flight controller(FC) for Quadrotor
 - Barometer: LPS22HB
 - Storage device: SDHC 16GB
 - Wireless module: NRF24L01P
-- Motor: 1400KV
+- Motor: 1400KV (with 8045 propeller)
+- Frame: F330
 
 # Threads (tasks)
 - radio_task(SPI2): Receive flight command and Acknowledge drone state wirelessly form radio controller
