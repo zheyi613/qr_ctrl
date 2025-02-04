@@ -14,5 +14,6 @@ A FreeRTOS flight controller(FC) for Quadrotor
 - radio_task(SPI2): Receive flight command and Acknowledge drone state wirelessly form radio controller
 - sensor_task(I2C2): Read sensor data and Implement complementary filter to get drone attitude
 - gps_task(UART2): Read and Decode GPS data
+- sd_task(SPI1): Store drone data to SD card
 - ctrl_task(PWM1234): Calculate PID output and Translate to motor output
-- msg_task(USB): Show the drone state and OS cost
+- msg_task(USB): Show the drone state and OS cost 
